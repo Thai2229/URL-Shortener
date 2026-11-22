@@ -1,10 +1,11 @@
 import Fastify from 'fastify';
+import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import type { Config } from './config.js';
 import { healthRoutes } from './routes/health.js';
 import { linksRoutes } from './routes/links.js';
 
-export function buildApp(config: Config, deps: { db: pg.Pool }) {
+export function buildApp(config: Config, deps: { db: pg.Pool; redis?: Redis }) {
   const app = Fastify({
     logger: process.env.NODE_ENV !== 'test' && { level: config.logLevel },
   });
@@ -27,7 +28,7 @@ export function buildApp(config: Config, deps: { db: pg.Pool }) {
       error: { code: 'internal_error', message: 'Internal server error' },
     });
   });
-  app.register(healthRoutes);
-  app.register(linksRoutes, { config, db: deps.db });
+  app.register(healthRoutes, { db: deps.db, redis: deps.redis });
+  app.register(linksRoutes, { config, db: deps.db, redis: deps.redis });
   return app;
 }

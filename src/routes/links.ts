@@ -1,5 +1,8 @@
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type { Redis } from 'ioredis';
 import type pg from 'pg';
+import type { CachedLink } from '../cache.js';
+import { cacheLink, cacheMissing, getCachedLink } from '../cache.js';
 import { generateCode } from '../code.js';
 import type { Config } from '../config.js';
 import { findLinkByCode, insertLink } from '../db/links.js';
@@ -21,7 +24,8 @@ function fail(
 export const linksRoutes: FastifyPluginAsync<{
   config: Config;
   db: pg.Pool;
-}> = async (app, { config, db }) => {
+  redis?: Redis;
+}> = async (app, { config, db, redis }) => {
   const shortBase = config.baseUrl.replace(/\/+$/, '');
   const shortUrl = (code: string) => `${shortBase}/${code}`;
 
@@ -56,6 +60,7 @@ export const linksRoutes: FastifyPluginAsync<{
         expiresAt,
       });
       if (link) {
+        await cacheLink(redis, link);
         return reply.code(201).send({
           code: link.code,
           shortUrl: shortUrl(link.code),
@@ -97,15 +102,37 @@ export const linksRoutes: FastifyPluginAsync<{
   );
 
   app.get<{ Params: { code: string } }>('/:code', async (request, reply) => {
-    const link = await lookup(request.params.code, reply);
-    if (!link) {
-      return reply;
+    const { code } = request.params;
+    let url: string;
+    let expiresAt: Date | null;
+    const valid = CODE_PATTERN.test(code);
+    let cached: CachedLink = { kind: 'miss' };
+    if (valid) {
+      cached = await getCachedLink(redis, code);
     }
-    if (link.expiresAt && link.expiresAt.getTime() <= Date.now()) {
+    if (cached.kind === 'negative') {
+      return fail(reply, 404, 'not_found', 'Link not found');
+    }
+    if (cached.kind === 'hit') {
+      url = cached.url;
+      expiresAt = cached.expiresAt;
+    } else {
+      const link = await lookup(code, reply);
+      if (!link) {
+        if (valid) {
+          await cacheMissing(redis, code);
+        }
+        return reply;
+      }
+      url = link.targetUrl;
+      expiresAt = link.expiresAt;
+      if (!expiresAt || expiresAt.getTime() > Date.now()) {
+        await cacheLink(redis, link);
+      }
+    }
+    if (expiresAt && expiresAt.getTime() <= Date.now()) {
       return fail(reply, 410, 'expired', 'Link has expired');
     }
-    return reply
-      .header('Cache-Control', 'no-store')
-      .redirect(link.targetUrl, 302);
+    return reply.header('Cache-Control', 'no-store').redirect(url, 302);
   });
 };

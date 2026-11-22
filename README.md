@@ -1,6 +1,6 @@
 # URL Shortener
 
-A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. So far it has the core API (create, redirect, metadata) and `/healthz`; caching, rate limiting and click counting come later. See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
+A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. So far it has the core API (create, redirect, metadata) `/healthz`, `/readyz` and Redis caching; rate limiting and click counting come later. See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
 
 ## Quickstart
 
@@ -43,6 +43,14 @@ curl localhost:3000/api/links/aB3dE9x
 
 Errors have the form `{ "error": { "code", "message" } }`, with codes `invalid_url`, `invalid_expiry`, `not_found`, `expired` and `internal_error`.
 
+## Caching
+
+Redirects are cache-aside in Redis under the key `link:{code}`. The value is a small JSON blob with the target URL and expiry. A link is cached for 24 hours (plus or minus 10% jitter), never past its `expiresAt`, and expired links are not cached. Creating a link writes it to the cache. Unknown codes get a negative marker for 60 seconds, so repeated lookups don't reach Postgres; creating a link with that code replaces the marker. Metadata (`GET /api/links/:code`) always reads Postgres.
+
+If `REDIS_URL` is unset or Redis is down, cache errors are swallowed and redirects fall back to Postgres. Redis calls time out after about 200 ms.
+
+`GET /readyz` returns `200` with `{ status, checks: { postgres, redis } }`. Postgres must be `ok`, otherwise it returns `503`. Redis is `ok`, `down` (still `200`) or `disabled`. `GET /healthz` stays a plain liveness check.
+
 ## Scripts
 
 - `npm run dev`: start with file watching (tsx)
@@ -55,4 +63,4 @@ Errors have the form `{ "error": { "code", "message" } }`, with codes `invalid_u
 
 ## Configuration
 
-Environment variables are listed in `.env.example`. `PORT`, `HOST`, `LOG_LEVEL` and `BASE_URL` have defaults. `DATABASE_URL` and `REDIS_URL` are optional until later steps use them. Invalid values stop the server at startup.
+Environment variables are listed in `.env.example`. `PORT`, `HOST`, `LOG_LEVEL` and `BASE_URL` have defaults. `DATABASE_URL` is required to start the server; `REDIS_URL` is optional (without it, caching is off). Tests use db 15 of `TEST_REDIS_URL` (default `redis://localhost:6379/15`). Invalid values stop the server at startup.

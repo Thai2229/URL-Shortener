@@ -1,6 +1,6 @@
 # URL Shortener
 
-A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. So far it has the core API (create, redirect, metadata) `/healthz`, `/readyz` and Redis caching; rate limiting and click counting come later. See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
+A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. It has an API to create, follow and inspect links, `/healthz` and `/readyz`, Redis caching, click counting, rate limiting and Prometheus metrics. See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
 
 A small landing page for creating short links is served at `/`.
 
@@ -60,7 +60,7 @@ If `REDIS_URL` is unset or Redis is down, cache errors are swallowed and redirec
 
 Each successful redirect (302) adds one to a Redis hash (`clicks`, field per code). Every `CLICK_FLUSH_INTERVAL_SECONDS` (default 5, `0` turns the timer off) the server moves that hash to `clicks:processing` and adds the totals to `links.click_count` in one SQL statement. A short Redis lock (`clicks:lock`) keeps replicas from flushing at the same time. On shutdown the server does a final flush.
 
-Counts are eventually consistent: `clickCount` is eventually consistent. On Vercel it can be much further behind; see [docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md#click-count-freshness). Clicks that happen while Redis is down are not counted. Counting is at-least-once: a crash or failure between the database write and the cleanup of the in-flight hash (`clicks:processing`) can count one batch twice, while failures before the write lose nothing (the batch is retried). A crash can also lose up to one interval of unflushed clicks. That is fine for analytics. Codes are flushed in sorted order in chunks of 5,000, so concurrent flushers lock rows in the same order. If you set the interval to `0`, run a scheduled job that creates a click counter and calls `flush()`.
+`clickCount` is eventually consistent. On Vercel it can be much further behind; see [docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md#click-count-freshness). Clicks that happen while Redis is down are not counted. Counting is at-least-once: a crash or failure between the database write and the cleanup of the in-flight hash (`clicks:processing`) can count one batch twice, while failures before the write lose nothing (the batch is retried). A crash can also lose up to one interval of unflushed clicks. That is fine for analytics. Codes are flushed in sorted order in chunks of 5,000, so concurrent flushers lock rows in the same order. If you set the interval to `0`, run a scheduled job that creates a click counter and calls `flush()`.
 
 ## Rate limiting
 
@@ -113,6 +113,16 @@ Serverless deployment with Neon and Upstash: [docs/DEPLOY_VERCEL.md](docs/DEPLOY
 ## Load testing
 
 k6 scenarios, a seed script and results are in [docs/LOADTEST.md](docs/LOADTEST.md). Run `npm run loadtest:seed` then `npm run loadtest`.
+
+## CI
+
+`.github/workflows/ci.yml` runs on pushes to `main` and on pull requests, with three jobs:
+
+- `test`: lint, typecheck and Vitest against Postgres and Redis service containers.
+- `smoke` (after `test`): builds, migrates, starts the compiled server and runs `loadtest/smoke.js` with k6. The script's thresholds fail the job.
+- `config`: `docker compose config` for the base and override files, `nginx -t` on `deploy/nginx.conf`, shell syntax checks, `vercel.json` parsing and `npm audit --omit=dev --audit-level=high`.
+
+Dependabot opens weekly grouped updates for npm and GitHub Actions.
 
 ## Scripts
 

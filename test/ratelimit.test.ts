@@ -305,7 +305,9 @@ describe('client-chosen keys under TRUST_PROXY=true', () => {
 describe('in-memory fallback bounds', () => {
   it('stays fast and bounded under a flood of distinct IPs and keeps enforcing', async () => {
     const app = make({ RATE_LIMIT_CREATE_MAX: '3' }, deadRedis);
-    const fixed = randomIp();
+    // Outside 10.200.0.0/16, the range the flood below uses, so no flood IP can collide with it.
+    const fixed = `172.31.${randomInt(256)}.${randomInt(1, 255)}`;
+    usedIps.push(fixed);
     global.gc?.();
     const before = process.memoryUsage().heapUsed;
     const start = Date.now();

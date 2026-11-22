@@ -60,20 +60,39 @@ describe('loadConfig', () => {
       });
     });
 
-    it.each(['false', '0'])('disables with RATE_LIMIT_ENABLED=%s', (v) => {
+    it.each([
+      'false',
+      'False',
+      'FALSE',
+      '0',
+      'off',
+      'OFF',
+      'no',
+      'No',
+      ' false ',
+    ])('disables with RATE_LIMIT_ENABLED=%j', (v) => {
       expect(loadConfig({ RATE_LIMIT_ENABLED: v }).rateLimit.enabled).toBe(
         false,
       );
     });
 
-    it('stays enabled for RATE_LIMIT_ENABLED=true or 1', () => {
-      expect(loadConfig({ RATE_LIMIT_ENABLED: 'true' }).rateLimit.enabled).toBe(
-        true,
-      );
-      expect(loadConfig({ RATE_LIMIT_ENABLED: '1' }).rateLimit.enabled).toBe(
-        true,
-      );
-    });
+    it.each(['true', 'True', 'TRUE', '1', 'on', 'ON', 'yes', 'Yes', ' true '])(
+      'enables with RATE_LIMIT_ENABLED=%j',
+      (v) => {
+        expect(loadConfig({ RATE_LIMIT_ENABLED: v }).rateLimit.enabled).toBe(
+          true,
+        );
+      },
+    );
+
+    it.each(['maybe', '2', 'disable'])(
+      'throws on invalid RATE_LIMIT_ENABLED=%s',
+      (v) => {
+        expect(() => loadConfig({ RATE_LIMIT_ENABLED: v })).toThrow(
+          /RATE_LIMIT_ENABLED/,
+        );
+      },
+    );
 
     it.each([
       'RATE_LIMIT_WINDOW_SECONDS',

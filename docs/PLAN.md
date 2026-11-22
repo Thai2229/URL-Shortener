@@ -36,7 +36,7 @@ client ──► nginx (step 9) ──► API replicas (Fastify, stateless)
 - Short codes. 7 random base62 characters from `crypto.randomBytes` (62^7 ≈ 3.5 trillion). Insert with `ON CONFLICT (code) DO NOTHING` and retry on the rare collision. There is no central counter to coordinate, and codes can't be enumerated.
 - Redirect status. `302` by default. Browsers cache a `301` permanently, which would hide clicks and break expiry and deletion.
 - Caching. Cache-aside with key `link:{code}`, a 24h TTL with jitter, capped at the link's `expires_at`. Misses are cached briefly (60s) so lookups for unknown codes can't hammer Postgres. If Redis is down, the API falls back to Postgres rather than failing.
-- Rate limiting. Per-IP, stored in Redis: strict on `POST /api/links`, loose on redirects. Returns `429` with `Retry-After`. Fails open if Redis is unreachable.
+- Rate limiting. Per-IP, stored in Redis: strict on `POST /api/links`, loose on redirects. Returns `429` with `Retry-After`. If Redis is unreachable each instance falls back to in-memory counters (stricter than failing open, per instance). IPv6 is bucketed per /64 and unmatched routes share the read limit.
 - Click counting. `INCR` in Redis on each redirect, flushed to Postgres in batches every few seconds. This keeps a database write off every redirect.
 
 ## API

@@ -63,9 +63,11 @@ Limits are per client IP, in fixed windows of `RATE_LIMIT_WINDOW_SECONDS` (defau
 
 `/healthz` and `/readyz` are never limited. Set `RATE_LIMIT_ENABLED=false` to turn limiting off. Over the limit, the API returns `429` with `{ "error": { "code": "rate_limited", ... } }` and a `Retry-After` header; successful responses carry `X-RateLimit-*` headers.
 
-Counters live in Redis under `rl:{route}:{ip}`, so all replicas share them. If Redis is unset or down, each instance counts in memory instead. Limits then apply per instance, and the counters start from zero when Redis comes back.
+IPv6 clients are bucketed per /64, and IPv4-mapped addresses share a bucket with the plain IPv4. Unmatched routes (404s) share the read limit, so scanning for random paths is throttled too.
 
-Warning: behind a proxy or load balancer, set `TRUST_PROXY` (`true`, a hop count such as `1`, or a comma-separated list of proxy IPs/CIDRs) so the real client IP is used; otherwise every client shares the proxy's IP. Leave it unset when clients connect directly. Trusting `X-Forwarded-For` from a source you don't control lets clients pick their own IP and dodge the limits.
+Counters live in Redis under `rl:{route}:{ip}`, so all replicas share them. If Redis is unset or down, each instance counts in memory instead (capped at 10,000 clients). That is stricter than failing open, but limits then apply per instance, and the counters restart from zero after an outage, so a client can briefly get up to about 2x the limit once.
+
+Warning: behind a proxy or load balancer, set `TRUST_PROXY` so the real client IP is used; otherwise every client shares the proxy's IP. Leave it unset when clients connect directly. `TRUST_PROXY=true` is only safe when the proxy or platform overwrites `X-Forwarded-For`; otherwise clients pick their own IP and dodge the limits, so use a hop count such as `1` or a comma-separated list of proxy IPs/CIDRs. An invalid forwarded address is ignored and the socket address is used. `/healthz` and `/readyz` are unlimited, so they should not be public (Step 9 keeps them internal).
 
 ## Scripts
 

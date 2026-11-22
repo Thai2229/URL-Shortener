@@ -1,4 +1,4 @@
-import Fastify from 'fastify';
+import Fastify, { type FastifyReply } from 'fastify';
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import type { Config } from './config.js';
@@ -14,11 +14,10 @@ export function buildApp(config: Config, deps: { db: pg.Pool; redis?: Redis }) {
   });
   // Fastify parses text/plain by default; only JSON is accepted here (else 415).
   app.removeContentTypeParser('text/plain');
-  app.setNotFoundHandler((_request, reply) =>
+  const notFound = (_request: unknown, reply: FastifyReply) =>
     reply
       .code(404)
-      .send({ error: { code: 'not_found', message: 'Not found' } }),
-  );
+      .send({ error: { code: 'not_found', message: 'Not found' } });
   app.setErrorHandler((err: { statusCode?: number }, request, reply) => {
     if (err.statusCode === 429) {
       return reply.code(429).send({
@@ -42,6 +41,15 @@ export function buildApp(config: Config, deps: { db: pg.Pool; redis?: Redis }) {
       redis: deps.redis,
       windowSeconds: config.rateLimit.windowSeconds,
     });
+    // app.rateLimit exists once the plugin has loaded; unmatched routes share the read limit.
+    app.after(() =>
+      app.setNotFoundHandler(
+        { preHandler: app.rateLimit({ max: config.rateLimit.readMax }) },
+        notFound,
+      ),
+    );
+  } else {
+    app.setNotFoundHandler(notFound);
   }
   app.register(healthRoutes, { db: deps.db, redis: deps.redis });
   app.register(linksRoutes, { config, db: deps.db, redis: deps.redis });

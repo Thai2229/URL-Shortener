@@ -33,6 +33,17 @@ function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
   return value;
 }
 
+function parseEnabled(value: string | undefined) {
+  const v = (value ?? '').trim().toLowerCase();
+  if (['false', '0', 'off', 'no'].includes(v)) {
+    return false;
+  }
+  if (v === '' || ['true', '1', 'on', 'yes'].includes(v)) {
+    return true;
+  }
+  throw new Error(`Invalid RATE_LIMIT_ENABLED: ${value}`);
+}
+
 function parseTrustProxy(value: string | undefined) {
   const v = (value ?? '').trim();
   if (v === '' || v === 'false') {
@@ -80,7 +91,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: env.DATABASE_URL || undefined,
     redisUrl: env.REDIS_URL || undefined,
     rateLimit: {
-      enabled: !['false', '0'].includes(env.RATE_LIMIT_ENABLED ?? ''),
+      enabled: parseEnabled(env.RATE_LIMIT_ENABLED),
       windowSeconds: positiveInt(env, 'RATE_LIMIT_WINDOW_SECONDS', 60),
       createMax: positiveInt(env, 'RATE_LIMIT_CREATE_MAX', 20),
       redirectMax: positiveInt(env, 'RATE_LIMIT_REDIRECT_MAX', 600),

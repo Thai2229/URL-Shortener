@@ -1,4 +1,5 @@
 import { randomInt } from 'node:crypto';
+import { normalizeIP } from '@fastify/rate-limit';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { createRedis } from '../src/redis.js';
@@ -203,14 +204,224 @@ describe('rate limiting', () => {
   });
 
   it('allows requests again after the window resets', async () => {
-    const app = make({ RATE_LIMIT_WINDOW_SECONDS: '1' });
+    const app = make({ RATE_LIMIT_WINDOW_SECONDS: '2' });
     const ip = randomIp();
     for (let i = 0; i < 3; i++) {
       await create(app, ip);
     }
-    expect((await create(app, ip)).statusCode).toBe(429);
-    await new Promise((r) => setTimeout(r, 1100));
+    const blocked = await create(app, ip);
+    expect(blocked.statusCode).toBe(429);
+    const retry = Number(blocked.headers['retry-after']);
+    const reset = Number(blocked.headers['x-ratelimit-reset']);
+    expect(Number.isInteger(retry)).toBe(true);
+    expect(retry).toBeGreaterThanOrEqual(1);
+    expect(retry).toBeLessThanOrEqual(2);
+    expect(reset).toBeGreaterThanOrEqual(1);
+    await new Promise((r) =>
+      setTimeout(r, Math.max(retry, reset) * 1000 + 100),
+    );
     expect((await create(app, ip)).statusCode).toBe(201);
+  }, 15000);
+});
+
+function randomV6Prefix() {
+  const hex = () => randomInt(0x10000).toString(16);
+  return `2001:db8:${hex()}:${hex()}`;
+}
+
+describe('IPv6 and mapped address normalization', () => {
+  it('shares one bucket across a /64', async () => {
+    const app = make({ RATE_LIMIT_REDIRECT_MAX: '3' });
+    const prefix = randomV6Prefix();
+    usedIps.push(normalizeIP(`${prefix}::1`, 64));
+    const codes: number[] = [];
+    for (let i = 1; i <= 8; i++) {
+      codes.push((await redirect(app, `${prefix}::${i}`)).statusCode);
+    }
+    expect(codes.slice(0, 3)).toEqual([404, 404, 404]);
+    expect(codes.slice(3)).toEqual([429, 429, 429, 429, 429]);
+  });
+
+  it('keeps separate buckets for different /64s', async () => {
+    const app = make({ RATE_LIMIT_REDIRECT_MAX: '3' });
+    const a = randomV6Prefix();
+    const b = randomV6Prefix();
+    usedIps.push(normalizeIP(`${a}::1`, 64), normalizeIP(`${b}::1`, 64));
+    for (let i = 0; i < 3; i++) {
+      await redirect(app, `${a}::1`);
+    }
+    expect((await redirect(app, `${a}::2`)).statusCode).toBe(429);
+    expect((await redirect(app, `${b}::1`)).statusCode).toBe(404);
+  });
+
+  it('shares a bucket between an IPv4-mapped address and the IPv4', async () => {
+    const app = make({ RATE_LIMIT_REDIRECT_MAX: '3' });
+    const v4 = randomIp();
+    expect((await redirect(app, v4)).statusCode).toBe(404);
+    expect((await redirect(app, `::ffff:${v4}`)).statusCode).toBe(404);
+    expect((await redirect(app, v4)).statusCode).toBe(404);
+    expect((await redirect(app, `::ffff:${v4}`)).statusCode).toBe(429);
+  });
+});
+
+describe('client-chosen keys under TRUST_PROXY=true', () => {
+  const garbage = [
+    () => `zz1:/:link:${uniqueCode('abc')}`,
+    () => `zz${'Q/:'.repeat(1700)}${uniqueCode('g')}`,
+  ];
+
+  it.each(garbage)(
+    'falls back to the socket address for invalid XFF',
+    async (mk) => {
+      const app = make({ TRUST_PROXY: 'true', RATE_LIMIT_REDIRECT_MAX: '3' });
+      const ip = randomIp();
+      const sent: string[] = [];
+      const codes: number[] = [];
+      for (let i = 0; i < 8; i++) {
+        const value = `${i}${mk()}`;
+        sent.push(value);
+        const res = await app.inject({
+          method: 'GET',
+          url: `/${uniqueCode('rl')}`,
+          remoteAddress: ip,
+          headers: { 'x-forwarded-for': value },
+        });
+        codes.push(res.statusCode);
+      }
+      expect(codes.slice(0, 3)).not.toContain(429);
+      expect(codes[3]).toBe(429);
+      const keys = await raw.keys('rl:*');
+      const leaked = keys.filter(
+        (k) => k.includes('zz') || sent.some((v) => k.includes(v)),
+      );
+      if (leaked.length > 0) {
+        await raw.del(...leaked);
+      }
+      expect(leaked).toEqual([]);
+    },
+  );
+});
+
+describe('in-memory fallback bounds', () => {
+  it('stays fast and bounded under a flood of distinct IPs and keeps enforcing', async () => {
+    const app = make({ RATE_LIMIT_CREATE_MAX: '3' }, deadRedis);
+    const fixed = randomIp();
+    global.gc?.();
+    const before = process.memoryUsage().heapUsed;
+    const start = Date.now();
+    for (let i = 0; i < 25000; i++) {
+      const ip = `10.${200 + (i >> 16)}.${(i >> 8) & 255}.${i & 255}`;
+      await app.inject({
+        method: 'POST',
+        url: '/api/links',
+        remoteAddress: ip,
+        payload: {},
+      });
+    }
+    expect(Date.now() - start).toBeLessThan(5000);
+    if (global.gc) {
+      global.gc();
+      expect(process.memoryUsage().heapUsed - before).toBeLessThan(
+        60 * 1024 * 1024,
+      );
+    }
+    const codes: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      codes.push((await create(app, fixed)).statusCode);
+    }
+    expect(codes.slice(0, 3)).not.toContain(429);
+    expect(codes[3]).toBe(429);
+  }, 60000);
+});
+
+describe('unmatched routes', () => {
+  it('limits 404s to readMax with the standard 429 format', async () => {
+    const app = make();
+    const ip = randomIp();
+    const other = randomIp();
+    for (let i = 0; i < 5; i++) {
+      const url = '/a/b/c/d';
+      const res = await app.inject({ method: 'GET', url, remoteAddress: ip });
+      expect(res.statusCode).toBe(404);
+    }
+    const res = await app.inject({
+      method: 'GET',
+      url: '/a/b/c/d',
+      remoteAddress: ip,
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error.code).toBe('rate_limited');
+    expect(Object.keys(res.json())).toEqual(['error']);
+    expect(String(res.headers['retry-after'])).toMatch(/^\d+$/);
+    const post = await app.inject({
+      method: 'POST',
+      url: '/api/nothing',
+      remoteAddress: ip,
+    });
+    expect(post.statusCode).toBe(429);
+    const fresh = await app.inject({
+      method: 'GET',
+      url: '/a/b/c/d',
+      remoteAddress: other,
+    });
+    expect(fresh.statusCode).toBe(404);
+  });
+
+  it('limits POST to an unknown path after readMax requests', async () => {
+    const app = make();
+    const ip = randomIp();
+    for (let i = 0; i < 5; i++) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/nothing',
+        remoteAddress: ip,
+      });
+      expect(res.statusCode).toBe(404);
+    }
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/nothing',
+      remoteAddress: ip,
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error.code).toBe('rate_limited');
+  });
+
+  it('keeps /healthz and /readyz unlimited', async () => {
+    const app = make();
+    const ip = randomIp();
+    for (let i = 0; i < 12; i++) {
+      expect(
+        (
+          await app.inject({
+            method: 'GET',
+            url: '/healthz',
+            remoteAddress: ip,
+          })
+        ).statusCode,
+      ).toBe(200);
+      expect(
+        (await app.inject({ method: 'GET', url: '/readyz', remoteAddress: ip }))
+          .statusCode,
+      ).toBe(200);
+    }
+  });
+});
+
+describe('counter without TTL', () => {
+  it('repairs a key that has no expiry', async () => {
+    const app = make();
+    const ip = randomIp();
+    const key = `rl:/api/links:${ip}`;
+    await raw.set(key, '100');
+    expect(await raw.ttl(key)).toBe(-1);
+    const res = await create(app, ip);
+    expect(res.statusCode).toBe(429);
+    const retry = String(res.headers['retry-after']);
+    expect(retry).toMatch(/^\d+$/);
+    expect(Number(retry)).toBeGreaterThanOrEqual(1);
+    expect(await raw.pttl(key)).toBeGreaterThan(0);
+    await raw.del(key);
   });
 });
 

@@ -8,7 +8,7 @@ The API is stateless, so it scales by running more replicas behind nginx. Shared
                         v
                 +---------------+   X-Forwarded-For overwritten with the client address
                 |     nginx     |   /metrics and /readyz: private clients only
-                | (one hop)     |   GET retried on the next replica on connect errors/timeouts
+                | (one hop)     |   GET retried on the next replica on connect errors/timeouts/503
                 +-------+-------+
           round robin   |   keepalive upstream
         +---------------+---------------+
@@ -55,6 +55,12 @@ More replicas than CPU cores do not add throughput on one machine. See the cavea
 - Prepared statements: `pg` only uses unnamed statements for parameterized queries, which work in transaction mode. `max_prepared_statements = 100` lets PgBouncer 1.21+ track named ones if they are added later. The `UNNEST` statement in the click flush runs fine through the pool.
 - `LISTEN` does not work. The app does not use it.
 
+### PgBouncer image, admin console and healthcheck
+
+- `image: ${PGBOUNCER_IMAGE:-edoburu/pgbouncer:latest}`. `latest` is only a default so `compose up` works. Set `PGBOUNCER_IMAGE` to an explicit version (1.21 or later, needed for `max_prepared_statements`) and optionally a digest (`name:tag@sha256:...`). No tag was chosen here because Docker Hub was not reachable when this was written.
+- The healthcheck runs `pg_isready`, which assumes that binary exists in the image. That is unverified without Docker. If it is missing, use a TCP check instead, for example `['CMD-SHELL', 'nc -z 127.0.0.1 6432']`, or a bash `/dev/tcp` redirect.
+- `deploy/pgbouncer.ini` sets no `admin_users` or `stats_users`, so the app user cannot open the admin console and the file hardcodes no user name (the userlist is generated from `POSTGRES_USER`). To get `SHOW POOLS`, add a separate admin user with its own password supplied from the environment. `loadtest/scaleout.sh` does this for its local copy with a random password.
+
 ## Tuning knobs
 
 | Knob | Where | Guidance |
@@ -76,7 +82,7 @@ More replicas than CPU cores do not add throughput on one machine. See the cavea
 | --- | --- |
 | Redis down | Redirects fall back to Postgres (cache off). Rate limits fall back to in-memory counters per replica, so the effective limit becomes about N times higher until Redis returns. Clicks during the outage are not counted. `/readyz` stays `200` with `redis: down`. |
 | Postgres down | Redirects of cached links still work for the cache TTL (up to 24 h). Cache misses, creates and metadata fail with errors, and `/readyz` returns `503`. Pending clicks stay in Redis and the flush retries (`click_flush_total{result="error"}`). Not exercised end to end here. |
-| One replica down | nginx retries idempotent GETs on the other replicas after a connect error or timeout and skips the dead one for 10 s (`fail_timeout` default). Measured with `loadtest/scaleout.sh`: 0 failed requests out of 3601 and out of 24000 for both SIGTERM and SIGKILL of one of 3 replicas under steady load. nginx does not retry a `POST` that was already sent to the dying replica; the client gets an error (not measured). |
+| One replica down | nginx retries idempotent requests (GET, HEAD) on the other replicas after a connect error, a timeout or a `503` (a replica that is shutting down) and skips the dead one for 10 s (`fail_timeout` default); at most 3 tries within 5 s. Measured with `loadtest/scaleout.sh` (`ONLY=f REPLICAS=2`, 300 req/s for 12 s, replica 2 sent SIGTERM at 4 s), five runs after `http_503` was added: 0 failed of 3601, 3601, 3601, 3601 and 3600 requests, so 0 failed in 5 of 5 runs. The check fails only above a budget of 5 per 10,000 requests (`TERM_BUDGET_PER_10K`), and it also fails if fewer than 90% of the planned requests were sent or the replica had not served traffic before the kill. One run at 2000 req/s: 0 failed of 24000 (SIGTERM) and of 24002 (SIGKILL). A `POST` is never retried once nginx has sent it (nginx's default; checked with a stub upstream that returns `503`: 6 POSTs made 6 upstream requests, no retries, while GETs were retried onto the healthy upstream), so a create that hits a dying replica returns an error to the client. |
 | PgBouncer down | Replicas cannot open database connections (5 s connect timeout). Cached redirects keep working; everything that needs Postgres fails and `/readyz` returns `503`. Click flushes fail and retry. Not exercised here. |
 | Replica recreated (Compose) | nginx resolves `api` when it starts or reloads. After `--scale api=N` changes or containers are recreated, run `docker compose exec nginx nginx -s reload`. |
 
@@ -88,7 +94,8 @@ Rate limits are per client IP, so the app must see the real client address.
 - The replicas run with `TRUST_PROXY=1`: exactly one trusted hop. The client is the last `X-Forwarded-For` entry, which nginx wrote.
 - Replicas must not be reachable except through nginx. A client that connects to a replica directly can send its own `X-Forwarded-For` and pick its bucket (the scale-out check shows this as a control). In Compose, `api` only uses `expose`, so no host port exists.
 - Do not put another proxy or load balancer in front of nginx without changing this contract: either make nginx use the real-IP module with that proxy's address, or move to `TRUST_PROXY` with explicit addresses.
-- `/metrics` and `/readyz` are answered with `404` by nginx unless the client address is in a private range (loopback, `10/8`, `172.16/12`, `192.168/16`, `::1`, `fc00::/7`). `/healthz` and everything else are proxied. The check is only as good as the address nginx sees. If a cloud load balancer or Docker Desktop proxy sits in front, outside clients can appear as private addresses; set `METRICS_TOKEN` as well. Scrape replicas directly on the internal network where you can.
+- `/metrics` and `/readyz` are answered with `404` by nginx unless the client address is in a private range (loopback, `10/8`, `172.16/12`, `192.168/16`, `::1`, `fc00::/7`). `/healthz` and everything else are proxied. The check is only as good as the address nginx sees. If a cloud load balancer or Docker Desktop proxy sits in front, outside clients can appear as private addresses; set `METRICS_TOKEN` as well: it is the second line of defense, and Compose forwards `METRICS_TOKEN` and `METRICS_ENABLED` to the replicas (an empty token means unset). Scrape replicas directly on the internal network where you can.
+- The same caveat has a second half. Behind a cloud load balancer, every client reaches nginx from the balancer's address, so nginx writes that one address into `X-Forwarded-For` and all clients share one rate-limit bucket. Fix it by putting the balancer's real client address into the chain: a `set_real_ip_from <balancer address>;` plus `real_ip_header X-Forwarded-For;` (or `proxy_protocol`) block in `deploy/nginx.conf`, with `set_real_ip_from` limited to the balancer's verified address range so clients cannot forge it. Or terminate the public connection at nginx.
 
 A note on the Fastify version in use (5.12): a numeric `trustProxy` is treated as "trust nobody", so `TRUST_PROXY=1` originally had no effect and every client shared nginx's address. `src/app.ts` now turns a hop count into an explicit hop function, with a test in `test/ratelimit.test.ts`.
 
@@ -114,4 +121,4 @@ REPLICAS=3 loadtest/scaleout.sh                                  # correctness c
 MODE=bench REPLICAS=2 RATE=2000 DURATION=20s loadtest/scaleout.sh # k6 redirect through nginx + PgBouncer
 ```
 
-The script starts replicas on ports 3001 and up, PgBouncer on 6432 and nginx on 8080 (plus 8081 for the outside-client check) from temp copies of `deploy/nginx.conf` and `deploy/pgbouncer.ini`, and stops all of them on exit. It uses the same local-only guard as `loadtest/run.sh`. When run as root, PgBouncer drops to the `nobody` user (`PGB_USER` to change).
+The script starts replicas on ports 3001 and up, PgBouncer on 6432 and nginx on 8080 (plus 8081 for the outside-client check) from temp copies of `deploy/nginx.conf` and `deploy/pgbouncer.ini`, and stops all of them on exit. It uses the same local-only guard as `loadtest/run.sh`. Everything binds to `127.0.0.1`. The temp dir is mode 700 and its files 600. PgBouncer refuses to run as root, so when the script runs as root PgBouncer runs as `nobody` (`PGB_USER` to change) with its own 700 dir owned by that user; otherwise it runs as the invoking user. The script prints an `ERROR line N: command` and an ABORTED verdict if it stops early. `ONLY=f` runs just the kill checks.

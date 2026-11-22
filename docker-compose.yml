@@ -56,9 +56,11 @@ services:
       retries: 10
 
   # Transaction pooling. The userlist is generated from the Postgres credentials at start, so no
-  # password lives in the repo. Config: deploy/pgbouncer.ini (upstream host "postgres").
+  # password lives in the repo. Config: deploy/pgbouncer.ini (upstream host "postgres"). No admin or
+  # stats user is configured, so the app user cannot use the admin console.
   pgbouncer:
-    image: edoburu/pgbouncer:latest # pin a version tag for real deployments
+    # Set PGBOUNCER_IMAGE to an explicit version (1.21+ for max_prepared_statements), see docs/SCALING.md.
+    image: ${PGBOUNCER_IMAGE:-edoburu/pgbouncer:latest}
     entrypoint:
       - sh
       - -c
@@ -120,6 +122,9 @@ services:
       RATE_LIMIT_REDIRECT_MAX: ${RATE_LIMIT_REDIRECT_MAX:-600}
       RATE_LIMIT_READ_MAX: ${RATE_LIMIT_READ_MAX:-120}
       CLICK_FLUSH_INTERVAL_SECONDS: ${CLICK_FLUSH_INTERVAL_SECONDS:-5}
+      # Empty token = unset in the app. See docs/SCALING.md for why to set it.
+      METRICS_ENABLED: ${METRICS_ENABLED:-true}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
     healthcheck:
       test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/healthz || exit 1']
       interval: 5s

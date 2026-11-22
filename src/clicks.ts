@@ -59,6 +59,7 @@ export function createClickCounter({
       }
     } catch (err) {
       debug('lock failed: %O', err);
+      state.error = true;
       return null;
     }
     try {

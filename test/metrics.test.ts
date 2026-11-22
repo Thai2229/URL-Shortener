@@ -584,6 +584,17 @@ describe('click counter instrumentation', () => {
     expect(m.clickFlush.mock.calls[0]?.[0]).toBe('skipped');
   });
 
+  it('reports error, not skipped, when taking the lock fails', async () => {
+    const m = spy();
+    const { clicks, prefix } = counter(appRedis, m);
+    const set = vi.spyOn(appRedis, 'set');
+    set.mockRejectedValueOnce(new Error('lock boom') as never);
+    expect(await clicks.flush()).toBeNull();
+    expect(set.mock.calls[0]?.[0]).toBe(`${prefix}:lock`);
+    expect(m.clickFlush).toHaveBeenCalledTimes(1);
+    expect(m.clickFlush.mock.calls[0]?.[0]).toBe('error');
+  });
+
   it('reports skipped when Redis is unavailable', async () => {
     const m = spy();
     const { clicks } = counter(deadRedis, m);

@@ -2,7 +2,8 @@ import { Writable } from 'node:stream';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { testConfig } from './helpers/config.js';
-import { usePool } from './helpers/db.js';
+import { insertLink } from '../src/db/links.js';
+import { uniqueCode, usePool } from './helpers/db.js';
 
 const pool = usePool();
 const apps: ReturnType<typeof buildApp>[] = [];
@@ -143,5 +144,58 @@ describe('request logging', () => {
     expect(text()).not.toContain('sid=secret');
     expect(text().toLowerCase()).not.toContain('"authorization"');
     expect(text().toLowerCase()).not.toContain('"cookie"');
+  });
+
+  describe('query strings', () => {
+    const SECRET = 'secret-query-value';
+
+    async function check(
+      method: 'GET' | 'POST',
+      url: string,
+      path: string,
+      status: number,
+      payload?: object,
+    ) {
+      const { app, lines, text } = capture();
+      const res = await app.inject({ method, url, payload });
+      expect(res.statusCode).toBe(status);
+      const id = res.headers['x-request-id'];
+      const mine = lines().filter((l) => l.reqId === id);
+      // Guard against a vacuous pass: the request must have produced log lines.
+      expect(mine.length).toBeGreaterThan(0);
+      expect(text()).not.toContain(SECRET);
+      expect(text()).not.toContain('token=');
+      expect(text()).not.toContain('apikey=');
+      const mineText = JSON.stringify(mine);
+      expect(mineText).toContain(path);
+      expect(mineText).toContain(method);
+      expect(mineText).toContain(String(status));
+    }
+
+    it('are not logged for a redirect', async () => {
+      const code = uniqueCode('rq');
+      await insertLink(pool, { code, targetUrl: 'https://example.com/rq' });
+      await check('GET', `/${code}?token=${SECRET}&x=1`, `/${code}`, 302);
+    });
+
+    it('are not logged for an unknown code (404)', async () => {
+      const code = uniqueCode('rq');
+      await check('GET', `/${code}?token=${SECRET}&x=1`, `/${code}`, 404);
+    });
+
+    it('are not logged for an unmatched URL (404)', async () => {
+      await check(
+        'GET',
+        `/no/such/route?token=${SECRET}&x=1`,
+        '/no/such/route',
+        404,
+      );
+    });
+
+    it('are not logged for POST /api/links', async () => {
+      await check('POST', `/api/links?apikey=${SECRET}`, '/api/links', 201, {
+        url: 'https://example.com/post',
+      });
+    });
   });
 });

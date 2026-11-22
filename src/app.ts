@@ -22,12 +22,27 @@ export function buildApp(
   },
 ) {
   const { metrics } = deps;
-  const redact = ['req.headers.authorization', 'req.headers.cookie'];
+  // Log the path only: query strings can carry secrets. Headers are never logged.
+  const serializers = {
+    req: (req: {
+      method?: string;
+      url?: string;
+      hostname?: string;
+      ip?: string;
+      socket?: { remotePort?: number };
+    }) => ({
+      method: req.method,
+      url: (req.url ?? '').split('?')[0],
+      hostname: req.hostname,
+      remoteAddress: req.ip,
+      remotePort: req.socket?.remotePort,
+    }),
+  };
   let logger: boolean | object = false;
   if (deps.logStream) {
-    logger = { level: 'info', stream: deps.logStream, redact };
+    logger = { level: 'info', stream: deps.logStream, serializers };
   } else if (process.env.NODE_ENV !== 'test') {
-    logger = { level: config.logLevel, redact };
+    logger = { level: config.logLevel, serializers };
   }
   const app = Fastify({
     logger,

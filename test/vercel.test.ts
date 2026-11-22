@@ -267,15 +267,22 @@ describe('click freshness on metadata reads', () => {
   it('schedules a flush for GET /api/links/:code and shows flushed counts', async () => {
     const { base, waitUntil } = await start();
     const { code } = (await (await create(base)).json()) as { code: string };
-    for (let i = 0; i < 3; i++) {
-      expect(
-        (await fetch(`${base}/${code}`, { redirect: 'manual' })).status,
-      ).toBe(302);
+    const redirect = async () =>
+      (await fetch(`${base}/${code}`, { redirect: 'manual' })).status;
+    // The first redirect flushes its own click. Wait for that flush to finish
+    // before the next redirects, so the flush cannot also pick up their clicks.
+    expect(await redirect()).toBe(302);
+    for (let i = 0; i < 50 && waitUntil.mock.calls.length < 1; i++) {
+      await sleep(20);
     }
+    await waitUntil.mock.calls[0]![0];
+    expect((await findLinkByCode(pool, code))?.clickCount).toBe(1);
+    // These two fall inside the throttle window, so they are recorded but not flushed.
+    expect(await redirect()).toBe(302);
+    expect(await redirect()).toBe(302);
     for (let i = 0; i < 50 && waitUntil.mock.calls.length < 3; i++) {
       await sleep(20);
     }
-    // First redirect flushes its own click; the others fall inside the throttle window.
     await Promise.all(waitUntil.mock.calls.map((c) => c[0]));
     expect((await findLinkByCode(pool, code))?.clickCount).toBe(1);
     await sleep(1100);

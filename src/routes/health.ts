@@ -1,7 +1,9 @@
+import { timingSafeEqual } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { isReady } from '../cache.js';
+import { sha256 } from './metrics.js';
 
 const CHECK_TIMEOUT_MS = 1000;
 
@@ -23,10 +25,30 @@ async function check(probe: () => Promise<unknown>) {
 export const healthRoutes: FastifyPluginAsync<{
   db: pg.Pool;
   redis?: Redis;
-}> = async (app, { db, redis }) => {
+  vercel?: boolean;
+  token?: string;
+}> = async (app, { db, redis, vercel, token }) => {
   app.get('/healthz', async () => ({ status: 'ok' }));
 
-  app.get('/readyz', async (_request, reply) => {
+  // Public Vercel deployments expose /readyz only behind the bearer token.
+  if (vercel && !token) {
+    return;
+  }
+
+  app.get('/readyz', async (request, reply) => {
+    if (
+      vercel &&
+      token &&
+      !timingSafeEqual(
+        sha256(request.headers.authorization ?? ''),
+        sha256(`Bearer ${token}`),
+      )
+    ) {
+      return reply
+        .code(401)
+        .header('WWW-Authenticate', 'Bearer')
+        .send({ error: { code: 'unauthorized', message: 'Unauthorized' } });
+    }
     let redisCheck = Promise.resolve('disabled');
     if (redis) {
       redisCheck = Promise.resolve('down');

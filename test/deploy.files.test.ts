@@ -47,3 +47,25 @@ describe('package.json and build script', () => {
     expect(text).toContain('migrate');
   });
 });
+
+describe('docs', () => {
+  const doc = read('docs/DEPLOY_VERCEL.md');
+  const readme = read('README.md');
+  it('covers Production and Preview environments for Neon and Upstash', () => {
+    expect(doc).toContain('Production');
+    expect(doc).toContain('Preview');
+  });
+  it('mentions VERCEL=1', () => {
+    expect(doc).toContain('VERCEL=1');
+  });
+  it('generates CRON_SECRET and METRICS_TOKEN with openssl rand -hex 32', () => {
+    expect(doc.split('openssl rand -hex 32').length - 1).toBeGreaterThanOrEqual(
+      2,
+    );
+  });
+  it('drops the inaccurate freshness phrase and explains the daily cron', () => {
+    expect(readme).not.toContain('lags by up to the flush interval');
+    expect(doc).not.toContain('lags by up to the flush interval');
+    expect(doc.includes('a day') || doc.includes('24 hours')).toBe(true);
+  });
+});

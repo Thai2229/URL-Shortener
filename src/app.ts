@@ -130,7 +130,12 @@ export function buildApp(
   } else {
     app.setNotFoundHandler(notFound);
   }
-  app.register(healthRoutes, { db: deps.db, redis: deps.redis });
+  app.register(healthRoutes, {
+    db: deps.db,
+    redis: deps.redis,
+    vercel: config.vercel,
+    token: config.metricsToken,
+  });
   app.register(linksRoutes, {
     config,
     db: deps.db,

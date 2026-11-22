@@ -11,13 +11,7 @@ import { isReady } from './cache.js';
 
 export type Metrics = ReturnType<typeof createMetrics>;
 
-export function createMetrics({
-  db,
-  redis,
-}: {
-  db: pg.Pool;
-  redis: Redis | undefined;
-}) {
+export function createMetrics({ db, redis }: { db: pg.Pool; redis?: Redis }) {
   // Per-app registry: several apps (tests) can live in one process.
   const register = new Registry();
   collectDefaultMetrics({ register });

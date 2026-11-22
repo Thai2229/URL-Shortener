@@ -19,7 +19,7 @@ export function createPool(
   });
   // An idle client error (e.g. server restart) would otherwise crash the process.
   pool.on('error', (err) => {
-    console.error('pg pool idle client error', err);
+    console.error(`pg pool idle client error: ${err.message}`);
   });
   return pool;
 }

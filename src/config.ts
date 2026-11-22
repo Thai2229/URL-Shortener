@@ -13,6 +13,7 @@ export interface Config {
   host: string;
   logLevel: string;
   baseUrl: string;
+  vercel: boolean;
   databaseUrl: string | undefined;
   redisUrl: string | undefined;
   rateLimit: {
@@ -49,6 +50,35 @@ export function migrateDatabaseUrl(env: NodeJS.ProcessEnv) {
     env.DATABASE_URL ||
     undefined
   );
+}
+
+// True when the host part (not user, path or query) is a Neon-style pooled endpoint.
+// Keep in sync with the check in scripts/vercel-build.sh.
+export function isPooledDatabaseUrl(url: string) {
+  if (!URL.canParse(url)) {
+    return false;
+  }
+  return new URL(url).hostname.includes('-pooler');
+}
+
+// An explicit MIGRATE_DATABASE_URL is trusted; otherwise a pooled URL is refused (advisory lock).
+export function resolveMigrationUrl(
+  env: NodeJS.ProcessEnv,
+): { url: string } | { error: string } {
+  const url = migrateDatabaseUrl(env);
+  if (!url) {
+    return {
+      error:
+        'MIGRATE_DATABASE_URL, DATABASE_URL_UNPOOLED or DATABASE_URL must be set',
+    };
+  }
+  if (!env.MIGRATE_DATABASE_URL && isPooledDatabaseUrl(url)) {
+    return {
+      error:
+        'The database URL is a pooled connection; migrations need a direct one. Set MIGRATE_DATABASE_URL or DATABASE_URL_UNPOOLED to the direct (non-pooled) URL.',
+    };
+  }
+  return { url };
 }
 
 function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
@@ -104,11 +134,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
+  const vercel = env.VERCEL === '1';
   let baseUrl = env.BASE_URL;
-  if (!baseUrl && env.VERCEL_PROJECT_PRODUCTION_URL) {
-    baseUrl = env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (!baseUrl) {
+    // Production uses the stable domain; previews and development use the per-deployment URL.
+    if (env.VERCEL_ENV === 'production') {
+      baseUrl = env.VERCEL_PROJECT_PRODUCTION_URL || env.VERCEL_URL;
+    } else {
+      baseUrl = env.VERCEL_URL || env.VERCEL_PROJECT_PRODUCTION_URL;
+    }
     // Vercel provides the bare domain without a scheme.
-    if (!/^https?:\/\//.test(baseUrl)) {
+    if (baseUrl && !/^https?:\/\//.test(baseUrl)) {
       baseUrl = `https://${baseUrl}`;
     }
   }
@@ -142,8 +178,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   // Vercel overwrites X-Forwarded-For, so trusting it is safe there unless TRUST_PROXY says otherwise.
   let trustProxy = parseTrustProxy(env.TRUST_PROXY);
-  if (env.VERCEL === '1' && (env.TRUST_PROXY ?? '').trim() === '') {
+  if (vercel && env.VERCEL_ENV && (env.TRUST_PROXY ?? '').trim() === '') {
     trustProxy = true;
+  }
+
+  // On Vercel the app is public, so metrics are off unless a token is set (explicit METRICS_ENABLED wins).
+  let metricsEnabled = parseEnabled(env.METRICS_ENABLED, 'METRICS_ENABLED');
+  if (vercel && (env.METRICS_ENABLED ?? '').trim() === '') {
+    metricsEnabled = metricsToken !== undefined;
   }
 
   return {
@@ -151,6 +193,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST || '0.0.0.0',
     logLevel,
     baseUrl,
+    vercel,
     databaseUrl: env.DATABASE_URL || undefined,
     redisUrl: env.REDIS_URL || env.KV_URL || undefined,
     rateLimit: {
@@ -162,7 +205,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     trustProxy,
     clickFlushIntervalSeconds,
-    metricsEnabled: parseEnabled(env.METRICS_ENABLED, 'METRICS_ENABLED'),
+    metricsEnabled,
     metricsToken,
     cronSecret,
   };

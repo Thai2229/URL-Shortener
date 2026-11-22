@@ -22,6 +22,7 @@ describe('loadConfig', () => {
       metricsEnabled: true,
       metricsToken: undefined,
       cronSecret: undefined,
+      vercel: false,
     });
   });
 

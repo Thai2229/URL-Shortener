@@ -50,8 +50,12 @@ export function createServerless(opts: {
   if (redis && intervalMs > 0 && opts.waitUntil) {
     const keepAlive = opts.waitUntil;
     // onSend runs while the response is still open, so the function is kept alive for the flush.
-    app.addHook('onSend', async (_request, reply, payload) => {
-      if (reply.statusCode === 302) {
+    app.addHook('onSend', async (request, reply, payload) => {
+      const route = request.routeOptions.url;
+      if (
+        reply.statusCode === 302 ||
+        (reply.statusCode === 200 && route === '/api/links/:code')
+      ) {
         keepAlive(clicks.flushIfDue(intervalMs));
       }
       return payload;

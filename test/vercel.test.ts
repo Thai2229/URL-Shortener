@@ -167,7 +167,10 @@ describe('request flow over HTTP', () => {
   it('calls waitUntil once per 302 and never for other statuses', async () => {
     const { base, waitUntil } = await start();
     const { code } = (await (await create(base)).json()) as { code: string };
-    expect((await fetch(`${base}/api/links/${code}`)).status).toBe(200);
+    expect(
+      (await fetch(`${base}/api/links/nope_${randomBytes(4).toString('hex')}`))
+        .status,
+    ).toBe(404);
     expect(
       (await fetch(`${base}/nope_${randomBytes(4).toString('hex')}`)).status,
     ).toBe(404);
@@ -197,6 +200,7 @@ describe('request flow over HTTP', () => {
     expect(
       (await fetch(`${base}/${code}`, { redirect: 'manual' })).status,
     ).toBe(302);
+    expect((await fetch(`${base}/api/links/${code}`)).status).toBe(200);
     await sleep(150);
     expect(waitUntil).not.toHaveBeenCalled();
   });
@@ -207,6 +211,7 @@ describe('request flow over HTTP', () => {
     expect(
       (await fetch(`${base}/${code}`, { redirect: 'manual' })).status,
     ).toBe(302);
+    expect((await fetch(`${base}/api/links/${code}`)).status).toBe(200);
     await sleep(150);
     expect(waitUntil).not.toHaveBeenCalled();
   });
@@ -216,6 +221,7 @@ describe('trusting X-Forwarded-For on Vercel', () => {
   it('rate limits by the forwarded address', async () => {
     const { base } = await start({
       VERCEL: '1',
+      VERCEL_ENV: 'production',
       RATE_LIMIT_ENABLED: 'true',
       RATE_LIMIT_CREATE_MAX: '2',
     });
@@ -237,5 +243,98 @@ describe('trusting X-Forwarded-For on Vercel', () => {
     const second = await create(base, { 'x-forwarded-for': randomIp() });
     expect(first.status === 201 || first.status === 429).toBe(true);
     expect(second.status).toBe(429);
+  });
+});
+
+describe('trusting X-Forwarded-For on Vercel without VERCEL_ENV', () => {
+  it('does not let a rotating X-Forwarded-For dodge the limiter', async () => {
+    const { base } = await start({
+      VERCEL: '1',
+      RATE_LIMIT_ENABLED: 'true',
+      RATE_LIMIT_CREATE_MAX: '3',
+    });
+    const statuses: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      statuses.push(
+        (await create(base, { 'x-forwarded-for': randomIp() })).status,
+      );
+    }
+    expect(statuses[3]).toBe(429);
+  });
+});
+
+describe('click freshness on metadata reads', () => {
+  it('schedules a flush for GET /api/links/:code and shows flushed counts', async () => {
+    const { base, waitUntil } = await start();
+    const { code } = (await (await create(base)).json()) as { code: string };
+    for (let i = 0; i < 3; i++) {
+      expect(
+        (await fetch(`${base}/${code}`, { redirect: 'manual' })).status,
+      ).toBe(302);
+    }
+    for (let i = 0; i < 50 && waitUntil.mock.calls.length < 3; i++) {
+      await sleep(20);
+    }
+    // First redirect flushes its own click; the others fall inside the throttle window.
+    await Promise.all(waitUntil.mock.calls.map((c) => c[0]));
+    expect((await findLinkByCode(pool, code))?.clickCount).toBe(1);
+    await sleep(1100);
+    const before = waitUntil.mock.calls.length;
+    const meta = await fetch(`${base}/api/links/${code}`);
+    expect(meta.status).toBe(200);
+    expect(((await meta.json()) as { clickCount: number }).clickCount).toBe(1);
+    expect(waitUntil).toHaveBeenCalledTimes(before + 1);
+    const promise = waitUntil.mock.calls[before]![0];
+    await expect(promise).resolves.toEqual({ codes: 1, clicks: 2 });
+    const again = await fetch(`${base}/api/links/${code}`);
+    expect(((await again.json()) as { clickCount: number }).clickCount).toBe(3);
+  });
+
+  it('does not schedule for 404 metadata, 201 creates, /healthz or cron', async () => {
+    const { base, waitUntil } = await start({
+      CRON_SECRET: 'cron-secret-0123456789',
+    });
+    expect((await create(base)).status).toBe(201);
+    expect(
+      (await fetch(`${base}/api/links/zzzzzz${randomBytes(3).toString('hex')}`))
+        .status,
+    ).toBe(404);
+    expect((await fetch(`${base}/healthz`)).status).toBe(200);
+    expect(
+      (
+        await fetch(`${base}/api/cron/flush`, {
+          headers: { authorization: 'Bearer cron-secret-0123456789' },
+        })
+      ).status,
+    ).toBe(200);
+    await sleep(150);
+    expect(waitUntil).not.toHaveBeenCalled();
+  });
+});
+
+describe('public endpoints on Vercel', () => {
+  const token = 'metrics-token-0123456789';
+
+  it('hides /metrics and /readyz without METRICS_TOKEN', async () => {
+    const { base } = await start({ VERCEL: '1' });
+    expect((await fetch(`${base}/metrics`)).status).toBe(404);
+    expect((await fetch(`${base}/readyz`)).status).toBe(404);
+    expect((await fetch(`${base}/healthz`)).status).toBe(200);
+  });
+
+  it('requires the bearer token on /metrics and /readyz with METRICS_TOKEN', async () => {
+    const { base } = await start({ VERCEL: '1', METRICS_TOKEN: token });
+    for (const path of ['/metrics', '/readyz']) {
+      const denied = await fetch(`${base}${path}`);
+      expect(denied.status).toBe(401);
+      expect(denied.headers.get('www-authenticate')).toBe('Bearer');
+      const body = (await denied.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('unauthorized');
+      const ok = await fetch(`${base}${path}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(ok.status).toBe(200);
+    }
+    expect((await fetch(`${base}/healthz`)).status).toBe(200);
   });
 });

@@ -7,6 +7,7 @@ import type { ClickCounter } from './clicks.js';
 import type { Config } from './config.js';
 import type { Metrics } from './metrics.js';
 import { registerRateLimit } from './ratelimit.js';
+import { cronRoutes } from './routes/cron.js';
 import { healthRoutes } from './routes/health.js';
 import { linksRoutes } from './routes/links.js';
 import { metricsRoutes } from './routes/metrics.js';
@@ -139,6 +140,12 @@ export function buildApp(
   });
   if (config.metricsEnabled && metrics) {
     app.register(metricsRoutes, { metrics, token: config.metricsToken });
+  }
+  if (config.cronSecret) {
+    app.register(cronRoutes, {
+      clicks: deps.clicks,
+      secret: config.cronSecret,
+    });
   }
   return app;
 }

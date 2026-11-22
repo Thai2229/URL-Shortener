@@ -1,12 +1,13 @@
-import { loadConfig } from '../config.js';
+import { migrateDatabaseUrl } from '../config.js';
 import { createPool } from '../db/pool.js';
 import { migrate } from '../db/migrate.js';
 
 // Migrations hold a session-level advisory lock, so they need a direct (non-pooled) connection.
-const databaseUrl =
-  process.env.MIGRATE_DATABASE_URL || loadConfig().databaseUrl;
+const databaseUrl = migrateDatabaseUrl(process.env);
 if (!databaseUrl) {
-  console.error('DATABASE_URL (or MIGRATE_DATABASE_URL) is not set');
+  console.error(
+    'MIGRATE_DATABASE_URL, DATABASE_URL_UNPOOLED or DATABASE_URL must be set',
+  );
   process.exit(1);
 }
 

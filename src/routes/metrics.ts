@@ -2,7 +2,8 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import type { FastifyPluginAsync } from 'fastify';
 import type { Metrics } from '../metrics.js';
 
-const sha256 = (value: string) => createHash('sha256').update(value).digest();
+export const sha256 = (value: string) =>
+  createHash('sha256').update(value).digest();
 
 export const metricsRoutes: FastifyPluginAsync<{
   metrics: Metrics;

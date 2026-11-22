@@ -26,6 +26,29 @@ export interface Config {
   clickFlushIntervalSeconds: number;
   metricsEnabled: boolean;
   metricsToken: string | undefined;
+  cronSecret: string | undefined;
+}
+
+// Whole-number env value within [min, max]; anything else (unset, empty, junk) gives the fallback.
+export function intFromEnv(
+  value: string | undefined,
+  { min, max, fallback }: { min: number; max: number; fallback: number },
+) {
+  const n = Number(value);
+  if (!/^\d+$/.test(value ?? '') || n < min || n > max) {
+    return fallback;
+  }
+  return n;
+}
+
+// Migrations hold a session-level advisory lock, so prefer a direct (non-pooled) connection.
+export function migrateDatabaseUrl(env: NodeJS.ProcessEnv) {
+  return (
+    env.MIGRATE_DATABASE_URL ||
+    env.DATABASE_URL_UNPOOLED ||
+    env.DATABASE_URL ||
+    undefined
+  );
 }
 
 function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
@@ -81,7 +104,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
-  const baseUrl = env.BASE_URL || 'http://localhost:3000';
+  let baseUrl = env.BASE_URL;
+  if (!baseUrl && env.VERCEL_PROJECT_PRODUCTION_URL) {
+    baseUrl = env.VERCEL_PROJECT_PRODUCTION_URL;
+    // Vercel provides the bare domain without a scheme.
+    if (!/^https?:\/\//.test(baseUrl)) {
+      baseUrl = `https://${baseUrl}`;
+    }
+  }
+  baseUrl = baseUrl || 'http://localhost:3000';
   if (!URL.canParse(baseUrl)) {
     throw new Error(`Invalid BASE_URL: ${baseUrl}`);
   }
@@ -104,13 +135,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error('Invalid METRICS_TOKEN: must be at least 16 characters');
   }
 
+  const cronSecret = env.CRON_SECRET || undefined;
+  if (cronSecret !== undefined && cronSecret.length < 16) {
+    throw new Error('Invalid CRON_SECRET: must be at least 16 characters');
+  }
+
+  // Vercel overwrites X-Forwarded-For, so trusting it is safe there unless TRUST_PROXY says otherwise.
+  let trustProxy = parseTrustProxy(env.TRUST_PROXY);
+  if (env.VERCEL === '1' && (env.TRUST_PROXY ?? '').trim() === '') {
+    trustProxy = true;
+  }
+
   return {
     port,
     host: env.HOST || '0.0.0.0',
     logLevel,
     baseUrl,
     databaseUrl: env.DATABASE_URL || undefined,
-    redisUrl: env.REDIS_URL || undefined,
+    redisUrl: env.REDIS_URL || env.KV_URL || undefined,
     rateLimit: {
       enabled: parseEnabled(env.RATE_LIMIT_ENABLED, 'RATE_LIMIT_ENABLED'),
       windowSeconds: positiveInt(env, 'RATE_LIMIT_WINDOW_SECONDS', 60),
@@ -118,9 +160,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       redirectMax: positiveInt(env, 'RATE_LIMIT_REDIRECT_MAX', 600),
       readMax: positiveInt(env, 'RATE_LIMIT_READ_MAX', 120),
     },
-    trustProxy: parseTrustProxy(env.TRUST_PROXY),
+    trustProxy,
     clickFlushIntervalSeconds,
     metricsEnabled: parseEnabled(env.METRICS_ENABLED, 'METRICS_ENABLED'),
     metricsToken,
+    cronSecret,
   };
 }

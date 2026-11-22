@@ -21,6 +21,7 @@ describe('loadConfig', () => {
       clickFlushIntervalSeconds: 5,
       metricsEnabled: true,
       metricsToken: undefined,
+      cronSecret: undefined,
     });
   });
 

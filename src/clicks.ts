@@ -30,9 +30,15 @@ export function createClickCounter({
   prefix?: string;
   lockSeconds?: number;
   metrics?: Metrics;
-}): ClickCounter {
+}): ClickCounter & {
+  flushIfDue(
+    minIntervalMs: number,
+  ): Promise<{ codes: number; clicks: number } | null>;
+} {
   const processing = `${prefix}:processing`;
   const lock = `${prefix}:lock`;
+  const due = `${prefix}:due`;
+  let nextDueAt = 0;
   let timer: NodeJS.Timeout | undefined;
   let running: Promise<unknown> | undefined;
 
@@ -126,6 +132,23 @@ export function createClickCounter({
     return result;
   }
 
+  // Request-driven flush: one instance-local check, then one cluster-wide marker.
+  async function flushIfDue(minIntervalMs: number) {
+    if (!isReady(redis) || Date.now() < nextDueAt) {
+      return null;
+    }
+    nextDueAt = Date.now() + minIntervalMs;
+    try {
+      if ((await redis.set(due, '1', 'PX', minIntervalMs, 'NX')) !== 'OK') {
+        return null;
+      }
+      return await flush();
+    } catch (err) {
+      debug('flushIfDue failed: %O', err);
+      return null;
+    }
+  }
+
   function start(intervalMs: number) {
     if (timer) {
       return;
@@ -147,5 +170,5 @@ export function createClickCounter({
     await flush();
   }
 
-  return { record, flush, start, stop };
+  return { record, flush, flushIfDue, start, stop };
 }

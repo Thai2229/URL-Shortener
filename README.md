@@ -104,6 +104,10 @@ Every response carries an `x-request-id` header. A valid incoming one (`A-Z a-z 
 
 nginx, PgBouncer and several API replicas: [docs/SCALING.md](docs/SCALING.md). `loadtest/scaleout.sh` runs the whole stack locally without Docker and checks it.
 
+## Deploying to Vercel
+
+Serverless deployment with Neon and Upstash: [docs/DEPLOY_VERCEL.md](docs/DEPLOY_VERCEL.md).
+
 ## Load testing
 
 k6 scenarios, a seed script and results are in [docs/LOADTEST.md](docs/LOADTEST.md). Run `npm run loadtest:seed` then `npm run loadtest`.

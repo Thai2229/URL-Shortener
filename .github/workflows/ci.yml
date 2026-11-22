@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -45,3 +52,91 @@ jobs:
           DATABASE_URL: postgres://urlshortener:urlshortener@localhost:5432/urlshortener_test
           TEST_DATABASE_URL: postgres://urlshortener:urlshortener@localhost:5432/urlshortener_test
           REDIS_URL: redis://localhost:6379
+
+  smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: urlshortener
+          POSTGRES_PASSWORD: urlshortener
+          POSTGRES_DB: urlshortener_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U urlshortener -d urlshortener_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://urlshortener:urlshortener@localhost:5432/urlshortener_test
+      REDIS_URL: redis://localhost:6379
+      PORT: 3000
+      BASE_URL: http://localhost:3000
+      RATE_LIMIT_ENABLED: false
+      LOG_LEVEL: warn
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node dist/scripts/migrate.js
+      - name: Start server
+        run: node dist/server.js > server.log 2>&1 & echo $! > server.pid
+      - name: Wait for /readyz
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fs "$BASE_URL/readyz" > /dev/null; then
+              exit 0
+            fi
+            sleep 0.5
+          done
+          echo "Server did not become ready" >&2
+          cat server.log >&2
+          exit 1
+      # v1 is the moving major tag of grafana/setup-k6-action; a full tag is not pinned
+      # because the exact patch versions could not be confirmed from here.
+      - uses: grafana/setup-k6-action@v1
+      - run: k6 run loadtest/smoke.js
+      - name: Server log
+        if: failure()
+        run: tail -n 100 server.log
+      - name: Stop server
+        if: always()
+        run: kill "$(cat server.pid)" || true
+
+  config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config -q
+      - run: docker compose -f docker-compose.yml -f docker-compose.override.example.yml config -q
+      # nginx resolves the "api" upstream at startup, which only works inside Compose.
+      - run: >-
+          docker run --rm --add-host api:127.0.0.1
+          -v "$PWD/deploy/nginx.conf:/etc/nginx/nginx.conf:ro"
+          nginx:1.27-alpine nginx -t
+      - run: sh -n scripts/vercel-build.sh loadtest/run.sh loadtest/scaleout.sh
+      - run: bash -n loadtest/run.sh loadtest/scaleout.sh
+      - run: node -e "JSON.parse(require('fs').readFileSync('vercel.json','utf8'))"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # Kept out of the test job: a new advisory should not mask test results.
+      - run: npm audit --omit=dev --audit-level=high

@@ -2,6 +2,8 @@
 
 A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. So far it has the core API (create, redirect, metadata) `/healthz`, `/readyz` and Redis caching; rate limiting and click counting come later. See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
 
+A small landing page for creating short links is served at `/`.
+
 ## Quickstart
 
 With Docker (nginx, API, PgBouncer, Postgres and Redis; only nginx is published, on port 3000):

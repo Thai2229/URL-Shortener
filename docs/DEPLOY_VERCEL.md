@@ -93,6 +93,7 @@ To use fewer commands:
 
 ## Differences from the Docker deployment
 
+- `/` and the static assets (`app.js`, `styles.css`, `favicon.svg`) are served by the Vercel CDN straight from `public/`, before the rewrite to the function. The function bundle also contains `public/` (`includeFiles` in `vercel.json`), because the home route reads those files at startup; without it the function would fail to start.
 - No nginx and no PgBouncer. Vercel is the edge, and Neon's pooled URL replaces PgBouncer.
 - No interval flusher. After a redirect, the function calls `flushIfDue` through `waitUntil`: at most one flush per instance per interval, and one cluster-wide through a `<prefix>:due` marker in Redis. A daily cron (`17 4 * * *`) is the backstop. Metadata reads also schedule a flush. Clicks after the last flush wait for the next redirect, the next metadata read or the cron.
 - `/metrics` is off by default and per instance, so scrapes see whichever instance answers.

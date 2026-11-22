@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shorten a URL</title>
+    <meta
+      name="description"
+      content="A small URL shortener. Paste a link, optionally set an expiry date, and get a short link that redirects."
+    />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Make a long link short.</h1>
+      <p class="lede">
+        Paste a web address. You get a short link that redirects to it.
+      </p>
+
+      <form id="shorten-form" method="post" action="/api/links" novalidate>
+        <label for="url">Web address</label>
+        <input
+          type="url"
+          name="url"
+          id="url"
+          required
+          maxlength="2048"
+          placeholder="https://example.com/a/very/long/path"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          aria-describedby="error"
+        />
+
+        <label for="expiresAt"
+          >Expires on <span class="optional">(optional, UTC)</span></label
+        >
+        <input type="date" name="expiresAt" id="expiresAt" />
+
+        <button type="submit" id="submit">Shorten</button>
+      </form>
+
+      <div class="output">
+        <p id="error" role="alert"></p>
+        <div id="result" aria-live="polite" hidden>
+          <p class="result-label">Your short link</p>
+          <div class="result-row">
+            <a id="short-url" target="_blank" rel="noopener noreferrer"></a>
+            <button type="button" id="copy">Copy</button>
+          </div>
+          <p id="expiry-note" class="note"></p>
+        </div>
+      </div>
+
+      <noscript
+        ><p class="noscript">
+          This page needs JavaScript to create short links. Please enable it and
+          reload.
+        </p></noscript
+      >
+
+      <details>
+        <summary>How it works</summary>
+        <p>
+          Each link gets a random code stored in Postgres, with a Redis cache in
+          front for fast redirects. Creating links is rate limited per IP
+          address. Clicks are counted asynchronously, so counts can lag a little
+          behind.
+        </p>
+      </details>
+    </main>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

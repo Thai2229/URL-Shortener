@@ -9,6 +9,7 @@ import type { Metrics } from './metrics.js';
 import { registerRateLimit } from './ratelimit.js';
 import { cronRoutes } from './routes/cron.js';
 import { healthRoutes } from './routes/health.js';
+import { homeRoutes } from './routes/home.js';
 import { linksRoutes } from './routes/links.js';
 import { metricsRoutes } from './routes/metrics.js';
 
@@ -136,6 +137,7 @@ export function buildApp(
     vercel: config.vercel,
     token: config.metricsToken,
   });
+  app.register(homeRoutes);
   app.register(linksRoutes, {
     config,
     db: deps.db,

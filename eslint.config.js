@@ -6,6 +6,23 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // Browser globals for the static landing page.
+    files: ['public/**/*.js'],
+    languageOptions: {
+      globals: {
+        document: 'readonly',
+        window: 'readonly',
+        navigator: 'readonly',
+        fetch: 'readonly',
+        URL: 'readonly',
+        Headers: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        console: 'readonly',
+      },
+    },
+  },
+  {
     // k6 runtime globals.
     files: ['loadtest/**/*.js'],
     languageOptions: {

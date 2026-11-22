@@ -5,7 +5,7 @@ k6 scenarios, a seed script and a runner for the redirect, create and rate-limit
 ## Prerequisites
 
 - Node 22, `npm install`, k6 (any recent version; tested with 1.8.3), `redis-cli`, `curl`.
-- Postgres and Redis reachable (for example `docker compose up -d postgres redis`).
+- Postgres and Redis reachable (for example `docker compose up -d postgres redis` with `docker-compose.override.yml` copied from the example so the ports are published).
 - `DATABASE_URL` set (see `.env.example`). `REDIS_URL` defaults to `redis://localhost:6379` in `run.sh`.
 - Safety guard: `run.sh` and `seed.ts` refuse to run unless the host of `DATABASE_URL` and `REDIS_URL` (if set) is `localhost`, `127.0.0.1` or `::1`, and they exit before touching anything. Set `LOADTEST_ALLOW_REMOTE=1` to override. A missing `REDIS_URL` is fine (`PROFILE=nocache`). The run deletes every `lt%` link and the `link:*`, `rl:*` and `clicks*` Redis keys, so never point it at data you care about.
 - Port 3000 free: `run.sh` starts its own `node dist/server.js` (change with `PORT`).
@@ -122,6 +122,62 @@ The peak is held for only 10 s, so these runs tolerate a rate that the 20 s stea
 - RSS stayed at 95-140 MB in all cache runs. Click flushes ran every 5 s with `result="ok"` only.
 - Process CPU for the whole server lifetime: cache 4000 run used about 13 s CPU (9.1 user, 4.0 system) for 80k requests; nocache 4000 used about 11.8 s.
 
+## Scaling out
+
+Run on 2026-11-22 on the same 4-core VM as above, with `loadtest/scaleout.sh` in `MODE=bench`: k6 `redirect.js` (cold cache start, 10,000 seeded links, 20 s, rate limiting off, `LOG_LEVEL=warn`, `REDIS_URL` set) goes through nginx (4 workers, `deploy/nginx.conf`) to N replicas, which use PgBouncer (transaction mode, pool 20) to the local Postgres. The "direct" rows are `run.sh PROFILE=cache` re-run in the same session (one Node process, no nginx, no PgBouncer). Each cell is a single run; differences of a few ms or a few hundred dropped iterations are within noise.
+
+Replica CPU is `top` over a 3 s window about 8 s into the run (100% = one core). k6 was at 82-85% (2000 req/s) and 110-120% (4000 req/s) in every row.
+
+| Setup | Rate | p50 ms | p95 ms | p99 ms | Dropped | CPU per replica | nginx workers (total) | Redis |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| direct, 1 process | 2000 | 0.47 | 1.44 | 9.45 | 0 | not sampled | none | not sampled |
+| nginx + PgBouncer, 1 replica | 2000 | 0.64 | 2.22 | 34.4 | 9 | 44% | 21% | 11% |
+| nginx + PgBouncer, 2 replicas | 2000 | 0.64 | 2.22 | 9.81 | 105 | 29%, 29% | 21% | 11% |
+| nginx + PgBouncer, 4 replicas | 2000 | 0.68 | 3.74 | 17.5 | 246 | 17-19% each | 21% | 13% |
+| direct, 1 process | 4000 | 0.52 | 5.62 | 49.0 | 369 | not sampled | none | not sampled |
+| nginx + PgBouncer, 1 replica | 4000 | 0.71 | 8.80 | 116.0 | 845 | 61% | 30% | 16% |
+| nginx + PgBouncer, 2 replicas | 4000 | 0.68 | 7.00 | 51.4 | 333 | 39%, 39% | 34% | 17% |
+| nginx + PgBouncer, 4 replicas | 4000 | 0.76 | 10.49 | 73.8 | 537 | 23-24% each | 30% | 18% |
+
+Earlier single-process cache run from the Results section above for reference: 2000 req/s p50 0.47, p95 1.7, p99 7.9 ms, 0 dropped; 4000 req/s p50 0.57, p95 8.1, p99 46.0 ms, 555 dropped.
+
+No row had failed requests or 5xx. All thresholds passed. (The redirect thresholds are p95 < 50 ms, p99 < 150 ms.)
+
+PgBouncer under these runs: with the cache on, redirects rarely reach Postgres, so the pool was idle: `SHOW POOLS` showed `cl_waiting` 0 and `maxwait` 0, and PgBouncer used about 2% CPU. To see it work, two extra runs used `NOCACHE=1` (no `REDIS_URL`, so every redirect is a Postgres lookup through PgBouncer) at 4000 req/s:
+
+| Setup | p50 ms | p95 ms | p99 ms | Dropped | Replica CPU | PgBouncer CPU | `SHOW POOLS` (4 samples) | `SHOW STATS` total wait |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 replica, no cache | 0.96 | 14.08 | 75.2 | 460 | 48% | 14% | `cl_active` 10, `cl_waiting` 0, `maxwait` 0, `sv_active` 0-2 of 10 | 55 ms over 79.5k transactions |
+| 2 replicas, no cache | 1.01 | 8.31 | 45.5 | 279 | 36%, 34% | 15% | `cl_active` 20, `cl_waiting` 0, `maxwait` 0, `sv_active` 0-5 of 20 | 216 ms over 79.7k transactions |
+
+PgBouncer never queued a client in these runs and used 14-15% of one core at 4000 queries/s. These nocache numbers are better than the nocache 4000 row in the Results section (p95 37.6 ms, 10 pool connections saturated). Do not read that as PgBouncer being faster: that run was a different session, one run each, and the Postgres pool there was the app's own pool of 10 with no pooler. What the new rows do show is that the pooler was not the limit at this rate.
+
+### What these numbers do and do not show
+
+- Everything shares 4 cores: k6 (over one core at 4000 req/s), nginx, PgBouncer, Redis, Postgres and the replicas. Adding replicas moves the same work onto more processes, so throughput scaling cannot be demonstrated here, and these runs do not do it. Dropped iterations do not fall steadily with the replica count, and k6 itself was the busiest process, so treat them as load-generator-limited.
+- Per-replica CPU falls as replicas are added (61% with 1, 39% with 2, 23% with 4 at 4000 req/s) while the sum rises (61, 78, 93). Part of that is the cost of more processes and context switches on a saturated box. It is consistent with the work being spread evenly, which `scaleout.sh` check (a) also confirms with counts, and it shows the cost of running more replicas than there are free cores.
+- nginx plus PgBouncer overhead: at 2000 req/s the median goes from 0.47 ms (direct) to 0.64-0.68 ms and p95 from 1.44 to 2.2-3.7 ms, which is the extra proxy hop. nginx workers used about 20-34% of one core in total. At 4000 req/s p95 and p99 are in the same range as direct (single runs; the 1-replica p99 of 116 ms is the worst of the set and is not repeated by the 2- and 4-replica rows).
+- Not measured: a capacity number for the stack, behaviour with the generator on another machine, replicas on separate hosts, a remote or loaded Postgres, longer runs, or Docker networking.
+
+### Scale-out correctness checks
+
+`REPLICAS=3 loadtest/scaleout.sh` starts 3 replicas, PgBouncer and nginx and prints PASS or FAIL for each check. Results of the last run:
+
+```
+PASS  (a) requests spread across all replicas: 90 requests, r1=31 r2=31 r3=28
+PASS  (b) rate limit is global (limit 20, 3 replicas): 60 creates via nginx: 20 201, 40 429
+PASS  (d) spoofed X-Forwarded-For does not change the bucket: via nginx: 429 429 429 ; control direct to replica (no nginx): 201
+PASS  (e) /metrics, /readyz blocked via nginx for outside clients: 404 404 404 404 200 (/metrics /readyz //metrics /%6detrics /healthz); private client /metrics: 200; direct replica /metrics /readyz: 200 200
+PASS  (c) click counts exact across replicas: 300 redirects, clickCount=300
+PASS  (f) SIGTERM one replica mid-run: GET redirects via nginx: 0 failed of 3601 requests
+PASS  (f) SIGKILL one replica mid-run: GET redirects via nginx: 0 failed of 3601 requests
+PASS  (g) SIGTERM flushes pending clicks: 200 redirects: pending in Redis=200, clickCount before=0, after SIGTERM=200, left in Redis=''
+```
+
+A second run with `KILL_RATE=2000` gave 0 failed of 24001 (SIGTERM) and 0 failed of 24000 (SIGKILL). The checks are one run each. The kill test is GET-only: a `POST` in flight on a killed replica is not retried by nginx and was not measured. The client in these checks is on loopback, so the "outside client" check runs a second nginx on port 8081 with the loopback entries removed from the private-range list.
+
+PgBouncer and the test suite: `npx vitest run` with `TEST_DATABASE_URL` pointed at PgBouncer (transaction mode). Of 357 tests, 355 to 357 passed across three runs; only the two lock tests in `test/db/migrate.test.ts` failed, intermittently (run 1: both failed, with an advisory lock left held; run 2: none; run 3: one failed, one lock left held). Everything else, including the click flush `UNNEST` statement, `/readyz` and the shutdown tests, passed through the pooler. That is the reason migrations use `MIGRATE_DATABASE_URL`. Those tests exercise the lock itself, so they are meant to run on a direct connection.
+
 ## Findings and next steps
 
 1. Cache vs no cache: up to 2000 req/s the differences are within noise. At 4000 req/s the cache run was faster (p95 8.1 ms, p99 46.0 ms vs 37.6 ms and 68.4 ms without), but both runs dropped iterations (555 and 875) because k6 was saturated and each scenario ran once, so treat it as indicative. The clearer signal is Postgres pool saturation without the cache at 6000 req/s (finding 4). Postgres is local, the dataset fits in memory and the lookup is a unique-index read; the cache should pay off more when Postgres is remote, busier or larger, which this setup cannot show. Re-run against separate hosts with repeats before drawing firm conclusions.
@@ -130,4 +186,4 @@ The peak is held for only 10 s, so these runs tolerate a rate that the 20 s stea
 4. The default pool of 10 connections is the first limit without the cache: 15 waiting requests were seen at 6000 req/s. If the cache is down in production, redirects fall back to Postgres and this is what will queue. Consider an alert on `pg_pool_connections{state="waiting"} > 0`.
 5. Unknown codes in `redirect.js` are random each time, so they always count as `miss` and never `negative`; the hit ratio therefore tops out near 98%. Real scanners that repeat codes would hit the negative cache.
 6. Cold start is visible: at 1000 req/s the first 20 s had 25% misses. Run with `WARM=1` for a steady-state view.
-7. Not done: longer soak runs, a larger dataset, a Postgres-slower scenario, a generator on a separate host, multiple app instances behind a load balancer.
+7. Not done: longer soak runs, a larger dataset, a Postgres-slower scenario, a generator on a separate host. Multiple instances behind nginx are covered in Scaling out above, with the caveats there.

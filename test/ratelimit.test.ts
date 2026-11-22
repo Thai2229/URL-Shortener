@@ -497,4 +497,23 @@ describe('trustProxy', () => {
       (await create(app, proxy, { 'x-forwarded-for': clientB })).statusCode,
     ).toBe(201);
   });
+
+  it('TRUST_PROXY=1 trusts exactly one hop: the last X-Forwarded-For entry is the client', async () => {
+    const app = make({ TRUST_PROXY: '1' });
+    const proxy = randomIp();
+    const client = randomIp();
+    for (let i = 0; i < 3; i++) {
+      const res = await create(app, proxy, {
+        'x-forwarded-for': `1.2.3.${i}, ${client}`,
+      });
+      expect(res.statusCode).toBe(201);
+    }
+    expect(
+      (await create(app, proxy, { 'x-forwarded-for': `9.9.9.9, ${client}` }))
+        .statusCode,
+    ).toBe(429);
+    expect(
+      (await create(app, proxy, { 'x-forwarded-for': randomIp() })).statusCode,
+    ).toBe(201);
+  });
 });

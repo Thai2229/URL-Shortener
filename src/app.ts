@@ -44,6 +44,13 @@ export function buildApp(
   } else if (process.env.NODE_ENV !== 'test') {
     logger = { level: config.logLevel, serializers };
   }
+  // Fastify 5.12 treats a numeric trustProxy as "trust nobody"; spell the hop count out.
+  let trustProxy: Config['trustProxy'] | ((a: string, hop: number) => boolean) =
+    config.trustProxy;
+  if (typeof trustProxy === 'number') {
+    const hops = trustProxy;
+    trustProxy = (_a: string, hop: number) => hop < hops;
+  }
   const app = Fastify({
     logger,
     requestIdHeader: false,
@@ -57,8 +64,7 @@ export function buildApp(
       }
       return randomUUID();
     },
-    // Fastify accepts a hop count at runtime; its types omit the number form.
-    trustProxy: config.trustProxy as boolean,
+    trustProxy: trustProxy as boolean,
   });
   // Fastify parses text/plain by default; only JSON is accepted here (else 415).
   app.removeContentTypeParser('text/plain');

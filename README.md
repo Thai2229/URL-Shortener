@@ -4,13 +4,16 @@ A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the sour
 
 ## Quickstart
 
-With Docker (API, Postgres and Redis):
+With Docker (nginx, API, PgBouncer, Postgres and Redis; only nginx is published, on port 3000):
 
 ```sh
 cp .env.example .env
-docker compose up --build
+docker compose up --build            # one API replica
+docker compose up --build --scale api=3
 curl localhost:3000/healthz
 ```
+
+Postgres and Redis are not published to the host. To reach them (tests, `psql`), copy `docker-compose.override.example.yml` to `docker-compose.override.yml`. Scaling, PgBouncer and nginx are described in [docs/SCALING.md](docs/SCALING.md).
 
 Without Docker for the API (needs Node 22):
 
@@ -73,7 +76,7 @@ IPv6 clients are bucketed per /64, and IPv4-mapped addresses share a bucket with
 
 Counters live in Redis under `rl:{route}:{ip}`, so all replicas share them. If Redis is unset or down, each instance counts in memory instead (capped at 10,000 clients). That is stricter than failing open, but limits then apply per instance, and the counters restart from zero after an outage, so a client can briefly get up to about 2x the limit once.
 
-Warning: behind a proxy or load balancer, set `TRUST_PROXY` so the real client IP is used; otherwise every client shares the proxy's IP. Leave it unset when clients connect directly. `TRUST_PROXY=true` is only safe when the proxy or platform overwrites `X-Forwarded-For`; otherwise clients pick their own IP and dodge the limits, so use a hop count such as `1` or a comma-separated list of proxy IPs/CIDRs. An invalid forwarded address is ignored and the socket address is used. `/healthz` and `/readyz` are unlimited, so they should not be public (Step 9 keeps them internal).
+Warning: behind a proxy or load balancer, set `TRUST_PROXY` so the real client IP is used; otherwise every client shares the proxy's IP. Leave it unset when clients connect directly. `TRUST_PROXY=true` is only safe when the proxy or platform overwrites `X-Forwarded-For`; otherwise clients pick their own IP and dodge the limits, so use a hop count such as `1` or a comma-separated list of proxy IPs/CIDRs. An invalid forwarded address is ignored and the socket address is used. `/healthz` and `/readyz` are unlimited, so `/readyz` should not be public (the nginx config in `deploy/` hides `/metrics` and `/readyz` from non-private clients). A hop count such as `TRUST_PROXY=1` trusts the connecting peer unconditionally, so the app must only be reachable through that proxy. See [docs/SCALING.md](docs/SCALING.md).
 
 ## Metrics
 
@@ -97,6 +100,10 @@ sum(rate(redirect_cache_total{result="hit"}[5m])) / sum(rate(redirect_cache_tota
 
 Every response carries an `x-request-id` header. A valid incoming one (`A-Z a-z 0-9 . _ -`, up to 64 characters) is reused; otherwise a UUID is generated. The same value is `reqId` in the log lines. Request lines log the method, the path without the query string, the status and the request id; headers and query strings are never logged. Each request writes log lines, so set `LOG_LEVEL=warn` during load tests.
 
+## Scaling out
+
+nginx, PgBouncer and several API replicas: [docs/SCALING.md](docs/SCALING.md). `loadtest/scaleout.sh` runs the whole stack locally without Docker and checks it.
+
 ## Load testing
 
 k6 scenarios, a seed script and results are in [docs/LOADTEST.md](docs/LOADTEST.md). Run `npm run loadtest:seed` then `npm run loadtest`.
@@ -106,11 +113,11 @@ k6 scenarios, a seed script and results are in [docs/LOADTEST.md](docs/LOADTEST.
 - `npm run dev`: start with file watching (tsx)
 - `npm run build`: compile to `dist/`
 - `npm start`: run the compiled server
-- `npm test`: run Vitest. It needs a `urlshortener_test` database (`TEST_DATABASE_URL`); create it once with `docker compose exec postgres createdb -U urlshortener urlshortener_test`.
+- `npm test`: run Vitest. It needs a `urlshortener_test` database (`TEST_DATABASE_URL`); create it once with `docker compose exec postgres createdb -U urlshortener urlshortener_test` (and use the override file so the host can reach Postgres).
 - `npm run lint`: ESLint
 - `npm run typecheck`: `tsc --noEmit`
 - `npm run format`: Prettier
 
 ## Configuration
 
-Environment variables are listed in `.env.example`. `PORT`, `HOST`, `LOG_LEVEL` and `BASE_URL` have defaults. `DATABASE_URL` is required to start the server; `REDIS_URL` is optional (without it, caching is off). Tests use db 15 of `TEST_REDIS_URL` (default `redis://localhost:6379/15`). Invalid values stop the server at startup.
+Environment variables are listed in `.env.example`. `PORT`, `HOST`, `LOG_LEVEL` and `BASE_URL` have defaults. `DATABASE_URL` is required to start the server; `MIGRATE_DATABASE_URL` (default `DATABASE_URL`) is used by `npm run db:migrate` and must be a direct Postgres connection when `DATABASE_URL` goes through PgBouncer; `REDIS_URL` is optional (without it, caching is off). Tests use db 15 of `TEST_REDIS_URL` (default `redis://localhost:6379/15`). Invalid values stop the server at startup.

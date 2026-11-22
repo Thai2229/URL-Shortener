@@ -1,12 +1,27 @@
+# Public entry point: nginx on ${HTTP_PORT:-3000}. Scale the API with `docker compose up --build --scale api=3`.
+# Postgres and Redis are not published; see docker-compose.override.example.yml for host access.
 services:
   postgres:
     image: postgres:17-alpine
+    # Sized for a small box (about 2 GB RAM). max_connections: PgBouncer pool (20) + reserve (5)
+    # + migrate + admin/superuser headroom. synchronous_commit stays on (the default, written out
+    # so nobody turns it off by accident): a created link must survive a crash.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - max_connections=50
+      - -c
+      - synchronous_commit=on
+      - -c
+      - log_min_duration_statement=200
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-urlshortener}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-urlshortener}
       POSTGRES_DB: ${POSTGRES_DB:-urlshortener}
-    ports:
-      - '5432:5432'
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -15,6 +30,9 @@ services:
       timeout: 3s
       retries: 10
 
+  # Redis holds the link cache (can be lost), rate-limit counters and pending click counts
+  # (worth keeping). AOF with everysec fsync loses at most about a second of counts on a crash;
+  # allkeys-lru evicts cache entries first under memory pressure (maxmemory 256mb).
   redis:
     image: redis:7-alpine
     command:
@@ -24,32 +42,105 @@ services:
         '256mb',
         '--maxmemory-policy',
         'allkeys-lru',
+        '--appendonly',
+        'yes',
+        '--appendfsync',
+        'everysec',
       ]
-    ports:
-      - '6379:6379'
+    volumes:
+      - redisdata:/data
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 5s
       timeout: 3s
       retries: 10
 
-  api:
-    build: .
-    command:
-      ['sh', '-c', 'node dist/scripts/migrate.js && exec node dist/server.js']
+  # Transaction pooling. The userlist is generated from the Postgres credentials at start, so no
+  # password lives in the repo. Config: deploy/pgbouncer.ini (upstream host "postgres").
+  pgbouncer:
+    image: edoburu/pgbouncer:latest # pin a version tag for real deployments
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        printf '"%s" "%s"\n' "$$POSTGRES_USER" "$$POSTGRES_PASSWORD" > /tmp/userlist.txt &&
+        exec pgbouncer /etc/pgbouncer/pgbouncer.ini
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-urlshortener}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-urlshortener}
+    volumes:
+      - ./deploy/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h 127.0.0.1 -p 6432']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # One-shot migration runner, direct to Postgres (session advisory lock; never via PgBouncer).
+  migrate:
+    build: .
+    command: ['node', 'dist/scripts/migrate.js']
+    restart: 'no'
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-urlshortener}:${POSTGRES_PASSWORD:-urlshortener}@postgres:5432/${POSTGRES_DB:-urlshortener}
+      MIGRATE_DATABASE_URL: postgres://${POSTGRES_USER:-urlshortener}:${POSTGRES_PASSWORD:-urlshortener}@postgres:5432/${POSTGRES_DB:-urlshortener}
+
+  api:
+    build: .
+    expose:
+      - '3000'
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_healthy
       redis:
         condition: service_healthy
-    ports:
-      - '3000:3000'
+    # The app bounds shutdown at 8 s; leave room so Docker does not SIGKILL the final click flush.
+    stop_grace_period: 15s
     environment:
       PORT: 3000
       BASE_URL: ${BASE_URL:-http://localhost:3000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
-      DATABASE_URL: postgres://${POSTGRES_USER:-urlshortener}:${POSTGRES_PASSWORD:-urlshortener}@postgres:5432/${POSTGRES_DB:-urlshortener}
+      DATABASE_URL: postgres://${POSTGRES_USER:-urlshortener}:${POSTGRES_PASSWORD:-urlshortener}@pgbouncer:6432/${POSTGRES_DB:-urlshortener}
+      MIGRATE_DATABASE_URL: postgres://${POSTGRES_USER:-urlshortener}:${POSTGRES_PASSWORD:-urlshortener}@postgres:5432/${POSTGRES_DB:-urlshortener}
       REDIS_URL: redis://redis:6379
+      PG_POOL_MAX: ${PG_POOL_MAX:-10}
+      # nginx is exactly one hop and overwrites X-Forwarded-For.
+      TRUST_PROXY: 1
+      RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+      RATE_LIMIT_WINDOW_SECONDS: ${RATE_LIMIT_WINDOW_SECONDS:-60}
+      RATE_LIMIT_CREATE_MAX: ${RATE_LIMIT_CREATE_MAX:-20}
+      RATE_LIMIT_REDIRECT_MAX: ${RATE_LIMIT_REDIRECT_MAX:-600}
+      RATE_LIMIT_READ_MAX: ${RATE_LIMIT_READ_MAX:-120}
+      CLICK_FLUSH_INTERVAL_SECONDS: ${CLICK_FLUSH_INTERVAL_SECONDS:-5}
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:3000/healthz || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - '${HTTP_PORT:-3000}:80'
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://127.0.0.1:80/healthz || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
 volumes:
   pgdata:
+  redisdata:

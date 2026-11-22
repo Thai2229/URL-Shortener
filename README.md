@@ -51,6 +51,22 @@ If `REDIS_URL` is unset or Redis is down, cache errors are swallowed and redirec
 
 `GET /readyz` returns `200` with `{ status, checks: { postgres, redis } }`. Postgres must be `ok`, otherwise it returns `503`. Redis is `ok`, `down` (still `200`) or `disabled`. `GET /healthz` stays a plain liveness check.
 
+## Rate limiting
+
+Limits are per client IP, in fixed windows of `RATE_LIMIT_WINDOW_SECONDS` (default 60). Each route has its own bucket:
+
+| Route                  | Variable                  | Default |
+| ---------------------- | ------------------------- | ------- |
+| `POST /api/links`      | `RATE_LIMIT_CREATE_MAX`   | 20      |
+| `GET /:code`           | `RATE_LIMIT_REDIRECT_MAX` | 600     |
+| `GET /api/links/:code` | `RATE_LIMIT_READ_MAX`     | 120     |
+
+`/healthz` and `/readyz` are never limited. Set `RATE_LIMIT_ENABLED=false` to turn limiting off. Over the limit, the API returns `429` with `{ "error": { "code": "rate_limited", ... } }` and a `Retry-After` header; successful responses carry `X-RateLimit-*` headers.
+
+Counters live in Redis under `rl:{route}:{ip}`, so all replicas share them. If Redis is unset or down, each instance counts in memory instead. Limits then apply per instance, and the counters start from zero when Redis comes back.
+
+Warning: behind a proxy or load balancer, set `TRUST_PROXY` (`true`, a hop count such as `1`, or a comma-separated list of proxy IPs/CIDRs) so the real client IP is used; otherwise every client shares the proxy's IP. Leave it unset when clients connect directly. Trusting `X-Forwarded-For` from a source you don't control lets clients pick their own IP and dodge the limits.
+
 ## Scripts
 
 - `npm run dev`: start with file watching (tsx)

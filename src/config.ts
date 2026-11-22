@@ -15,6 +15,43 @@ export interface Config {
   baseUrl: string;
   databaseUrl: string | undefined;
   redisUrl: string | undefined;
+  rateLimit: {
+    enabled: boolean;
+    windowSeconds: number;
+    createMax: number;
+    redirectMax: number;
+    readMax: number;
+  };
+  trustProxy: boolean | number | string[];
+}
+
+function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
+  const value = Number(env[name] || fallback);
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`Invalid ${name}: ${env[name]}`);
+  }
+  return value;
+}
+
+function parseTrustProxy(value: string | undefined) {
+  const v = (value ?? '').trim();
+  if (v === '' || v === 'false') {
+    return false;
+  }
+  if (v === 'true') {
+    return true;
+  }
+  if (/^\d+$/.test(v)) {
+    return Number(v);
+  }
+  const list = v
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (list.length === 0) {
+    throw new Error(`Invalid TRUST_PROXY: ${value}`);
+  }
+  return list;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -42,5 +79,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     baseUrl,
     databaseUrl: env.DATABASE_URL || undefined,
     redisUrl: env.REDIS_URL || undefined,
+    rateLimit: {
+      enabled: !['false', '0'].includes(env.RATE_LIMIT_ENABLED ?? ''),
+      windowSeconds: positiveInt(env, 'RATE_LIMIT_WINDOW_SECONDS', 60),
+      createMax: positiveInt(env, 'RATE_LIMIT_CREATE_MAX', 20),
+      redirectMax: positiveInt(env, 'RATE_LIMIT_REDIRECT_MAX', 600),
+      readMax: positiveInt(env, 'RATE_LIMIT_READ_MAX', 120),
+    },
+    trustProxy: parseTrustProxy(env.TRUST_PROXY),
   };
 }

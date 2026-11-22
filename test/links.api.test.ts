@@ -9,7 +9,7 @@ import {
 } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { generateCode } from '../src/code.js';
-import { loadConfig } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 import { findLinkByCode, insertLink } from '../src/db/links.js';
 import { uniqueCode, usePool } from './helpers/db.js';
 
@@ -20,14 +20,14 @@ vi.mock('../src/code.js', async (importOriginal) => {
 
 const pool = usePool();
 const BASE = 'http://short.test';
-const app = buildApp(loadConfig({ BASE_URL: BASE }), { db: pool });
-const slashApp = buildApp(loadConfig({ BASE_URL: 'http://Short.Test:8080/' }), {
+const app = buildApp(testConfig({ BASE_URL: BASE }), { db: pool });
+const slashApp = buildApp(testConfig({ BASE_URL: 'http://Short.Test:8080/' }), {
   db: pool,
 });
-const shoApp = buildApp(loadConfig({ BASE_URL: 'https://sho.rt' }), {
+const shoApp = buildApp(testConfig({ BASE_URL: 'https://sho.rt' }), {
   db: pool,
 });
-const localApp = buildApp(loadConfig({ BASE_URL: 'http://localhost:3000' }), {
+const localApp = buildApp(testConfig({ BASE_URL: 'http://localhost:3000' }), {
   db: pool,
 });
 let realGenerate: typeof generateCode;

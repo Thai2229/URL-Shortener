@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { buildApp } from '../src/app.js';
-import { loadConfig } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 import { createRedis } from '../src/redis.js';
 import { usePool } from './helpers/db.js';
 import { testRedisUrl, waitFailed, waitReady } from './helpers/redis.js';
 
 const pool = usePool();
-const config = loadConfig({});
+const config = testConfig({});
 const apps: ReturnType<typeof buildApp>[] = [];
 const closers: (() => unknown)[] = [];
 afterAll(async () => {

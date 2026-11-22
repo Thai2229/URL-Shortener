@@ -1,10 +1,10 @@
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
-import { loadConfig } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 import { usePool } from './helpers/db.js';
 
 describe('GET /healthz', () => {
-  const app = buildApp(loadConfig({}), { db: usePool() });
+  const app = buildApp(testConfig({}), { db: usePool() });
   afterAll(() => app.close());
 
   it('returns ok', async () => {

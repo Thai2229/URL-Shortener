@@ -10,7 +10,7 @@ import {
 import { buildApp } from '../src/app.js';
 import { cacheKey, cacheLink, cacheMissing } from '../src/cache.js';
 import { generateCode } from '../src/code.js';
-import { loadConfig } from '../src/config.js';
+import { testConfig } from './helpers/config.js';
 import { insertLink } from '../src/db/links.js';
 import { createRedis } from '../src/redis.js';
 import { uniqueCode, usePool } from './helpers/db.js';
@@ -30,7 +30,7 @@ vi.mock('../src/code.js', async (importOriginal) => {
 const pool = usePool();
 const raw = useRedis();
 const appRedis = createRedis(testRedisUrl());
-const config = loadConfig({ BASE_URL: 'http://short.test' });
+const config = testConfig({ BASE_URL: 'http://short.test' });
 const app = buildApp(config, { db: pool, redis: appRedis });
 const deadRedis = createRedis('redis://127.0.0.1:1');
 const deadApp = buildApp(config, { db: pool, redis: deadRedis });

@@ -8,16 +8,18 @@ export function buildApp(config: Config, deps: { db: pg.Pool }) {
   const app = Fastify({
     logger: process.env.NODE_ENV !== 'test' && { level: config.logLevel },
   });
+  // Fastify parses text/plain by default; only JSON is accepted here (else 415).
+  app.removeContentTypeParser('text/plain');
   app.setNotFoundHandler((_request, reply) =>
     reply
       .code(404)
       .send({ error: { code: 'not_found', message: 'Not found' } }),
   );
   app.setErrorHandler((err: { statusCode?: number }, request, reply) => {
-    // Client errors (bad JSON, unsupported content type, ...) are all bad input.
+    // Client errors (bad JSON, unsupported content type, ...) keep their status.
     if (err.statusCode && err.statusCode >= 400 && err.statusCode < 500) {
-      return reply.code(400).send({
-        error: { code: 'invalid_url', message: 'Invalid request body' },
+      return reply.code(err.statusCode).send({
+        error: { code: 'bad_request', message: 'Invalid request' },
       });
     }
     request.log.error(err);

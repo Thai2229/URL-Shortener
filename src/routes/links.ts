@@ -38,14 +38,14 @@ export const linksRoutes: FastifyPluginAsync<{
       );
     }
     let expiresAt: Date | null = null;
-    if (body?.expiresAt !== undefined) {
+    if (body?.expiresAt !== undefined && body.expiresAt !== null) {
       expiresAt = validateExpiry(body.expiresAt);
       if (!expiresAt) {
         return fail(
           reply,
           400,
           'invalid_expiry',
-          'expiresAt must be an ISO date in the future',
+          'expiresAt must be an ISO 8601 date (YYYY-MM-DD) or datetime with Z or ±HH:MM offset (YYYY-MM-DDTHH:mm[:ss[.fff]]), in the future and within 10 years',
         );
       }
     }

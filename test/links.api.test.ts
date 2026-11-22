@@ -24,6 +24,12 @@ const app = buildApp(loadConfig({ BASE_URL: BASE }), { db: pool });
 const slashApp = buildApp(loadConfig({ BASE_URL: 'http://Short.Test:8080/' }), {
   db: pool,
 });
+const shoApp = buildApp(loadConfig({ BASE_URL: 'https://sho.rt' }), {
+  db: pool,
+});
+const localApp = buildApp(loadConfig({ BASE_URL: 'http://localhost:3000' }), {
+  db: pool,
+});
 let realGenerate: typeof generateCode;
 
 beforeAll(async () => {
@@ -38,6 +44,8 @@ afterEach(() => {
 afterAll(async () => {
   await app.close();
   await slashApp.close();
+  await shoApp.close();
+  await localApp.close();
 });
 
 function create(body: unknown, target = app) {
@@ -155,7 +163,7 @@ describe('POST /api/links', () => {
     });
 
     it.each(['text/plain', 'application/xml'])(
-      'rejects content type %s',
+      'rejects content type %s with 415 bad_request',
       async (type) => {
         const res = await app.inject({
           method: 'POST',
@@ -163,18 +171,76 @@ describe('POST /api/links', () => {
           headers: { 'content-type': type },
           payload: 'https://example.com',
         });
-        expectError(res, 400, 'invalid_url');
+        expectError(res, 415, 'bad_request');
       },
     );
 
-    it('rejects malformed JSON as invalid_url', async () => {
+    it('rejects malformed JSON with 400 bad_request', async () => {
       const res = await app.inject({
         method: 'POST',
         url: '/api/links',
         headers: { 'content-type': 'application/json' },
         payload: '{"url":',
       });
-      expectError(res, 400, 'invalid_url');
+      expectError(res, 400, 'bad_request');
+    });
+
+    it('rejects an empty body with JSON content type as 400 bad_request', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/links',
+        headers: { 'content-type': 'application/json' },
+        payload: '',
+      });
+      expectError(res, 400, 'bad_request');
+    });
+
+    it('rejects a body over 1 MiB with 413 bad_request', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/links',
+        headers: { 'content-type': 'application/json' },
+        payload: JSON.stringify({
+          url: 'https://example.com/' + 'x'.repeat(1_048_576),
+        }),
+      });
+      expectError(res, 413, 'bad_request');
+    });
+
+    it('uses a generic message for client errors', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/links',
+        headers: { 'content-type': 'application/json' },
+        payload: '{"url":',
+      });
+      const message = res.json().error.message as string;
+      expect(message).not.toMatch(/JSON|token|position|FST_/i);
+    });
+
+    it('rejects a url that is only too long after normalization', async () => {
+      const url = 'https://a.com/' + '\u00e9'.repeat(700);
+      expect(url.length).toBeLessThan(2048);
+      expect(new URL(url).href.length).toBeGreaterThan(2048);
+      expectError(await create({ url }), 400, 'invalid_url');
+    });
+
+    it.each([
+      ['trailing dot', 'https://sho.rt./x'],
+      ['trailing dot, upper case, default port', 'https://SHO.RT.:443/x'],
+      ['plain', 'https://sho.rt/x'],
+    ])('rejects own host on sho.rt app: %s', async (_name, url) => {
+      expectError(await create({ url }, shoApp), 400, 'invalid_url');
+    });
+
+    it('rejects own host with trailing dot on localhost app, allows other port', async () => {
+      expectError(
+        await create({ url: 'http://localhost.:3000/x' }, localApp),
+        400,
+        'invalid_url',
+      );
+      const other = await create({ url: 'http://localhost:3001/x' }, localApp);
+      expect(other.statusCode).toBe(201);
     });
   });
 
@@ -185,6 +251,16 @@ describe('POST /api/links', () => {
       ['past', '2000-01-01T00:00:00Z'],
       ['one second ago', () => new Date(Date.now() - 1000).toISOString()],
       ['number', 12345],
+      ['zoneless datetime', '2030-01-01T00:00:00'],
+      ['space separated', '2030-01-01 00:00'],
+      ['US date', '12/25/2030'],
+      ['month name', 'Jan 1 2030'],
+      ['year only', '2030'],
+      ['over 10 years', '2099-01-01T00:00:00Z'],
+      [
+        '10 years plus a day',
+        () => new Date(Date.now() + 3660 * 86_400_000).toISOString(),
+      ],
     ])('rejects %s', async (_name, value) => {
       const expiresAt = typeof value === 'function' ? value() : value;
       expectError(
@@ -192,6 +268,33 @@ describe('POST /api/links', () => {
         400,
         'invalid_expiry',
       );
+    });
+
+    it.each([
+      ['2030-01-01T00:00:00Z', '2030-01-01T00:00:00.000Z'],
+      ['2030-01-01T00:00:00.000+09:00', '2029-12-31T15:00:00.000Z'],
+      ['2030-01-01T00:00-05:30', '2030-01-01T05:30:00.000Z'],
+      ['2030-01-01', '2030-01-01T00:00:00.000Z'],
+    ])('accepts %s and stores the UTC instant', async (input, iso) => {
+      const res = await create({
+        url: 'https://example.com/x',
+        expiresAt: input,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().expiresAt).toBe(iso);
+      const row = await findLinkByCode(pool, res.json().code);
+      expect(row?.expiresAt?.toISOString()).toBe(iso);
+    });
+
+    it('treats expiresAt null as no expiry', async () => {
+      const res = await create({
+        url: 'https://example.com/x',
+        expiresAt: null,
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().expiresAt).toBeNull();
+      const row = await findLinkByCode(pool, res.json().code);
+      expect(row?.expiresAt).toBeNull();
     });
 
     it('does not store a link when validation fails', async () => {

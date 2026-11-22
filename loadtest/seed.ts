@@ -1,3 +1,4 @@
+import './guard.js';
 import { writeFile } from 'node:fs/promises';
 import { createPool } from '../src/db/pool.js';
 import { migrate } from '../src/db/migrate.js';

@@ -12,6 +12,9 @@ REDIS="${REDIS_URL:-redis://localhost:6379}"
 export BASE_URL="http://localhost:${PORT}"
 mkdir -p loadtest/results
 
+# Refuse non-local DATABASE_URL/REDIS_URL before anything is migrated, seeded or deleted.
+npx tsx loadtest/guard.ts
+
 SERVER_PID=""
 stop_server() {
   if [ -n "$SERVER_PID" ]; then
@@ -71,7 +74,7 @@ run_one() {
     fi
   fi
   echo "### ${script} profile=${profile} label=${label} start=${start}"
-  start_server "$profile" "loadtest/results/server-${label}.log"
+  start_server "$profile" "loadtest/results/server-${script}-${label}.log"
   local rc=0
   LABEL="$label" "$K6" run --quiet "loadtest/${script}.js" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -81,7 +84,7 @@ run_one() {
   {
     echo "# profile=${profile} script=${script} start=${start} k6_exit=${rc}"
     curl -fs "$BASE_URL/metrics" | grep -E '^(redirect_cache_total|http_request_duration_seconds_count|click_flush_total|pg_pool_connections|rate_limit_rejected_total|process_cpu_(user|system)_seconds_total|process_resident_memory_bytes|nodejs_heap_size_used_bytes)' || true
-  } >"loadtest/results/metrics-${label}.txt"
+  } >"loadtest/results/metrics-${script}-${label}.txt"
   stop_server
 }
 

@@ -7,6 +7,7 @@ k6 scenarios, a seed script and a runner for the redirect, create and rate-limit
 - Node 22, `npm install`, k6 (any recent version; tested with 1.8.3), `redis-cli`, `curl`.
 - Postgres and Redis reachable (for example `docker compose up -d postgres redis`).
 - `DATABASE_URL` set (see `.env.example`). `REDIS_URL` defaults to `redis://localhost:6379` in `run.sh`.
+- Safety guard: `run.sh` and `seed.ts` refuse to run unless the host of `DATABASE_URL` and `REDIS_URL` (if set) is `localhost`, `127.0.0.1` or `::1`, and they exit before touching anything. Set `LOADTEST_ALLOW_REMOTE=1` to override. A missing `REDIS_URL` is fine (`PROFILE=nocache`). The run deletes every `lt%` link and the `link:*`, `rl:*` and `clicks*` Redis keys, so never point it at data you care about.
 - Port 3000 free: `run.sh` starts its own `node dist/server.js` (change with `PORT`).
 
 ## Running
@@ -24,7 +25,7 @@ PROFILE=ratelimit loadtest/run.sh ratelimit
 
 `npm run loadtest:smoke|redirect|mixed|spike|ratelimit` run one script with k6 against an already running server (`BASE_URL`, default `http://localhost:3000`). Set `K6` to use another k6 binary. The server must have the matching settings (rate limiting off for everything except `ratelimit`, `LOG_LEVEL=warn`).
 
-`run.sh` builds if `dist/` is stale, runs migrations and the seed, then for each script starts a fresh server, waits for `/readyz`, runs k6, saves selected `/metrics` lines and stops the server (trap on exit). Output goes to `loadtest/results/` (gitignored): `<script>-<label>.json` (k6 summary), `metrics-<label>.txt`, `server-<label>.log`. Exit code is non-zero if any k6 run crossed a threshold.
+`run.sh` builds if `dist/` is stale, runs migrations and the seed, then for each script starts a fresh server, waits for `/readyz`, runs k6, saves selected `/metrics` lines and stops the server (trap on exit). Output goes to `loadtest/results/` (gitignored): `<script>-<label>.json` (k6 summary), `metrics-<script>-<label>.txt`, `server-<script>-<label>.log`. Exit code is non-zero if any k6 run crossed a threshold. The saved results use this naming too (the files were renamed after the run).
 
 | Variable           | Default                 | Used by                                                             |
 | ------------------ | ----------------------- | ------------------------------------------------------------------- |
@@ -47,7 +48,7 @@ All requests use `redirects: 0`; k6 never follows the 302 to example.com.
 | Script         | What it does                                                                                                                                                                                                               | Thresholds                                                                                                                                                                  |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `smoke.js`     | 1 VU, 20 iterations: create, redirect (302 and Location), metadata, unknown code (404), `/healthz`, `/readyz`. Correctness check, not load.                                                                              | No failed requests, all checks pass, p95 < 200 ms.                                                                                                                          |
-| `redirect.js`  | `constant-arrival-rate` of `GET /:code`. 80% of requests go to the first 20% of the codes (hot set), the rest are uniform; 2% use an unknown code (404 expected). The main read test.                                      | Unexpected-status rate < 1% (302 and 404 count as expected), p95 < 50 ms, p99 < 150 ms, checks > 99%. 50 ms is far under any user-visible redirect budget and tight enough to show queuing. |
+| `redirect.js`  | `constant-arrival-rate` of `GET /:code`. 80% of requests pick from the first 20% of the codes (hot set, 2000 codes) and the other 20% pick uniformly from all codes, so the hot set receives about 84% of requests (0.8 + 0.2 x 0.2) and the other 8000 codes share about 16%; 2% use an unknown code (404 expected). The main read test.                                      | Unexpected-status rate < 1% (302 and 404 count as expected), p95 < 50 ms, p99 < 150 ms, checks > 99%. 50 ms is far under any user-visible redirect budget and tight enough to show queuing. |
 | `mixed.js`     | Arrival rate with 95% redirects and 5% `POST /api/links` (unique URLs), tagged `name:redirect` / `name:create`.                                                                                                            | Redirect as above; create p95 < 150 ms; error rate < 1% per group.                                                                                                          |
 | `spike.js`     | `ramping-arrival-rate`: `RATE/4` for 10 s, ramp to 3x `RATE`, hold 10 s, back to `RATE/4`, 10 s. Looks at queuing and recovery.                                                                                            | p95 < 200 ms, errors < 2%, checks > 98%. Looser because the ramp is meant to stress.                                                                                        |
 | `ratelimit.js` | One IP posts 100 creates/s for 15 s against a limit of 20/min. Needs `RATE_LIMIT_ENABLED=true`.                                                                                                                            | Mix of 201 and 429, every 429 has `Retry-After`, 5xx rate exactly 0.                                                                                                        |
@@ -77,9 +78,9 @@ Hit ratio = `hit / (hit + miss + negative)` from `redirect_cache_total`. A cold 
 | 4000         | 0.57   | 8.1    | 46.0   | 0%                | 555     | 87.4%     | pass       |
 | 6000         | 0.88   | 37.5   | 108.6  | 0%                | 3115    | 89.9%     | pass       |
 | 8000         | 4.7    | 101.5  | 347.2  | 0%                | 6421    | 91.5%     | p95, p99 fail |
-| 10000        | 36.3   | 162.3  | 265.0  | 0%                | 16772   | 92.5%     | p95 fail   |
+| 10000        | 36.3   | 162.3  | 265.0  | 0%                | 16772   | 92.5%     | p95, p99 fail |
 
-Knee with cache: between 6000 and 8000 req/s. The 6000 run passes but delivered about 97% of the target and has a 1.3 s maximum; 8000 fails twice (8000, 10000), so the climb stopped there.
+Knee with cache: between 6000 and 8000 req/s. The 6000 run passes its thresholds but dropped 3115 iterations (it delivered about 97% of the arrival rate) and has a 1.3 s maximum. Both 8000 and 10000 fail p95 and p99, so the climb stopped there.
 
 ### Redirect, nocache profile (no `REDIS_URL`, every redirect is a Postgres lookup, 20 s)
 
@@ -123,9 +124,9 @@ The peak is held for only 10 s, so these runs tolerate a rate that the 20 s stea
 
 ## Findings and next steps
 
-1. On this machine, Redis does not help latency: p50/p95 are within noise up to 4000 req/s, and the capacity gain is modest (knee between 6000 and 8000 vs 4000 and 6000). Postgres is local, the dataset fits in memory and the lookup is a unique-index read. The cache should pay off when Postgres is remote, busier or larger; this setup cannot show it. Re-run against separate hosts before drawing conclusions about the cache.
+1. Cache vs no cache: up to 2000 req/s the differences are within noise. At 4000 req/s the cache run was faster (p95 8.1 ms, p99 46.0 ms vs 37.6 ms and 68.4 ms without), but both runs dropped iterations (555 and 875) because k6 was saturated and each scenario ran once, so treat it as indicative. The clearer signal is Postgres pool saturation without the cache at 6000 req/s (finding 4). Postgres is local, the dataset fits in memory and the lookup is a unique-index read; the cache should pay off more when Postgres is remote, busier or larger, which this setup cannot show. Re-run against separate hosts with repeats before drawing firm conclusions.
 2. The cache path costs Node CPU too: per hit there is a Redis read plus a click counter write (`HINCRBY`). It is not a bug, but if the single event loop is the limit, running several instances (the design's scaling path) matters more than the cache.
-3. The design target of about 5k redirects/s and 100 creates/s is met on this box in the steady cache runs up to 6000 req/s (with dropped iterations from 4000), and the mixed run covers the creates target. Because k6 is a bottleneck above 4000, confirm with a generator on another machine.
+3. The design target of about 5k redirects/s and 100 creates/s is met on this box in the steady cache runs up to 6000 req/s, which passed its thresholds but delivered about 97% of the arrival rate (iterations were dropped from 4000 req/s), and the mixed run covers the creates target. Because k6 is a bottleneck above 4000, confirm with a generator on another machine.
 4. The default pool of 10 connections is the first limit without the cache: 15 waiting requests were seen at 6000 req/s. If the cache is down in production, redirects fall back to Postgres and this is what will queue. Consider an alert on `pg_pool_connections{state="waiting"} > 0`.
 5. Unknown codes in `redirect.js` are random each time, so they always count as `miss` and never `negative`; the hit ratio therefore tops out near 98%. Real scanners that repeat codes would hit the negative cache.
 6. Cold start is visible: at 1000 req/s the first 20 s had 25% misses. Run with `WARM=1` for a steady-state view.

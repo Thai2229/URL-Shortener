@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   LINK_TTL_SECONDS,
   NEGATIVE_TTL_SECONDS,
@@ -9,10 +9,20 @@ import {
 } from '../src/cache.js';
 import { createRedis } from '../src/redis.js';
 import { uniqueCode } from './helpers/db.js';
-import { testRedisUrl, trackKey, useRedis } from './helpers/redis.js';
+import {
+  offlineQueueLength,
+  testRedisUrl,
+  trackKey,
+  useRedis,
+  waitFailed,
+  waitReady,
+} from './helpers/redis.js';
 
 const raw = useRedis();
 const cached = createRedis(testRedisUrl());
+beforeAll(async () => {
+  await waitReady(cached);
+});
 afterAll(async () => {
   cached.disconnect();
 });
@@ -133,6 +143,21 @@ describe('cacheMissing', () => {
     expect(ttl).toBeLessThanOrEqual(60);
   });
 
+  it('does not overwrite an existing positive entry', async () => {
+    const code = fresh();
+    await cacheLink(cached, {
+      code,
+      targetUrl: 'https://example.com/keep',
+      expiresAt: null,
+    });
+    await cacheMissing(cached, code);
+    expect(await getCachedLink(cached, code)).toEqual({
+      kind: 'hit',
+      url: 'https://example.com/keep',
+      expiresAt: null,
+    });
+  });
+
   it('is replaced by cacheLink', async () => {
     const code = fresh();
     await cacheMissing(cached, code);
@@ -152,6 +177,11 @@ describe('corrupt values', () => {
     ['json null', 'null'],
     ['json number', '42'],
     ['json object of wrong shape', '{"foo":1}'],
+    [
+      'expiry finite but out of Date range',
+      '{"u":"https://example.com","e":1e20}',
+    ],
+    ['expiry as non-number string', '{"u":"https://example.com","e":"soon"}'],
   ])('treats %s as a miss', async (_name, value) => {
     const code = fresh();
     await raw.set(cacheKey(code), value, 'EX', 30);
@@ -194,6 +224,41 @@ describe('dead redis', () => {
   });
 });
 
+describe('dead redis, after the first failed connect', () => {
+  it('skips commands: 50 sequential lookups are instant', async () => {
+    const dead = createRedis('redis://127.0.0.1:1');
+    await waitFailed(dead);
+    const start = Date.now();
+    for (let i = 0; i < 50; i++) {
+      expect(await getCachedLink(dead, fresh())).toEqual({ kind: 'miss' });
+    }
+    expect(Date.now() - start).toBeLessThan(200);
+    dead.disconnect();
+  });
+
+  it('never grows the offline queue under concurrency', async () => {
+    const dead = createRedis('redis://127.0.0.1:1');
+    await waitFailed(dead);
+    const calls: Promise<unknown>[] = [];
+    for (let i = 0; i < 200; i++) {
+      const code = fresh();
+      calls.push(
+        getCachedLink(dead, code),
+        cacheLink(dead, {
+          code,
+          targetUrl: 'https://example.com/q',
+          expiresAt: null,
+        }),
+        cacheMissing(dead, code),
+      );
+    }
+    expect(offlineQueueLength(dead)).toBe(0);
+    await Promise.all(calls);
+    expect(offlineQueueLength(dead)).toBe(0);
+    dead.disconnect();
+  });
+});
+
 describe('createRedis', () => {
   it('fails fast and does not crash on connection errors', async () => {
     const dead = createRedis('redis://127.0.0.1:1');
@@ -206,6 +271,7 @@ describe('createRedis', () => {
 
   it('works against a live redis', async () => {
     const live = createRedis(testRedisUrl());
+    await waitReady(live);
     expect(await live.ping()).toBe('PONG');
     live.disconnect();
   });

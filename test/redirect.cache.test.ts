@@ -14,7 +14,13 @@ import { loadConfig } from '../src/config.js';
 import { insertLink } from '../src/db/links.js';
 import { createRedis } from '../src/redis.js';
 import { uniqueCode, usePool } from './helpers/db.js';
-import { testRedisUrl, trackKey, useRedis } from './helpers/redis.js';
+import {
+  testRedisUrl,
+  trackKey,
+  useRedis,
+  waitFailed,
+  waitReady,
+} from './helpers/redis.js';
 
 vi.mock('../src/code.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/code.js')>();
@@ -31,6 +37,8 @@ const deadApp = buildApp(config, { db: pool, redis: deadRedis });
 let realGenerate: typeof generateCode;
 
 beforeAll(async () => {
+  await waitReady(appRedis);
+  await waitFailed(deadRedis);
   const actual =
     await vi.importActual<typeof import('../src/code.js')>('../src/code.js');
   realGenerate = actual.generateCode;
@@ -229,6 +237,15 @@ describe('redis down at request time', () => {
     expect(res.statusCode).toBe(302);
     expect(res.headers.location).toBe('https://example.com/down');
     expect(Date.now() - start).toBeLessThan(1500);
+  });
+
+  it('redirect answers 302 in under 150ms once the client has failed', async () => {
+    const code = fresh();
+    await insertLink(pool, { code, targetUrl: 'https://example.com/fast' });
+    const start = Date.now();
+    const res = await get(code, deadApp);
+    expect(res.statusCode).toBe(302);
+    expect(Date.now() - start).toBeLessThan(150);
   });
 
   it('unknown code still returns 404 quickly', async () => {

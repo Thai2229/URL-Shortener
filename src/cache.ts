@@ -17,11 +17,16 @@ export function cacheKey(code: string) {
   return `link:${code}`;
 }
 
+// Skip Redis while disconnected so nothing piles up in the offline queue.
+export function isReady(redis: Redis | undefined): redis is Redis {
+  return redis !== undefined && redis.status === 'ready';
+}
+
 export async function getCachedLink(
   redis: Redis | undefined,
   code: string,
 ): Promise<CachedLink> {
-  if (!redis) {
+  if (!isReady(redis)) {
     return { kind: 'miss' };
   }
   try {
@@ -33,7 +38,13 @@ export async function getCachedLink(
     if (v?.n === 1) {
       return { kind: 'negative' };
     }
-    if (typeof v?.u === 'string' && (v.e === null || Number.isFinite(v.e))) {
+    if (
+      typeof v?.u === 'string' &&
+      (v.e === null ||
+        (typeof v.e === 'number' &&
+          Number.isFinite(v.e) &&
+          Math.abs(v.e) <= 8.64e15))
+    ) {
       let expiresAt: Date | null = null;
       if (v.e !== null) {
         expiresAt = new Date(v.e as number);
@@ -50,7 +61,7 @@ export async function cacheLink(
   redis: Redis | undefined,
   link: { code: string; targetUrl: string; expiresAt: Date | null },
 ): Promise<void> {
-  if (!redis) {
+  if (!isReady(redis)) {
     return;
   }
   let ttl = Math.round(LINK_TTL_SECONDS * (0.9 + Math.random() * 0.2));
@@ -76,11 +87,12 @@ export async function cacheMissing(
   redis: Redis | undefined,
   code: string,
 ): Promise<void> {
-  if (!redis) {
+  if (!isReady(redis)) {
     return;
   }
   try {
-    await redis.set(cacheKey(code), NEGATIVE, 'EX', NEGATIVE_TTL_SECONDS);
+    // NX: never overwrite a positive entry.
+    await redis.set(cacheKey(code), NEGATIVE, 'EX', NEGATIVE_TTL_SECONDS, 'NX');
   } catch (err) {
     debug('set %s failed: %O', code, err);
   }

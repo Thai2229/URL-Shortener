@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
+import { isReady } from '../cache.js';
 
 const CHECK_TIMEOUT_MS = 1000;
 
@@ -28,7 +29,10 @@ export const healthRoutes: FastifyPluginAsync<{
   app.get('/readyz', async (_request, reply) => {
     let redisCheck = Promise.resolve('disabled');
     if (redis) {
-      redisCheck = check(() => redis.ping());
+      redisCheck = Promise.resolve('down');
+      if (isReady(redis)) {
+        redisCheck = check(() => redis.ping());
+      }
     }
     const [postgres, redisStatus] = await Promise.all([
       check(() => db.query('SELECT 1')),

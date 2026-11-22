@@ -4,7 +4,7 @@ import { buildApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
 import { createRedis } from '../src/redis.js';
 import { usePool } from './helpers/db.js';
-import { testRedisUrl } from './helpers/redis.js';
+import { testRedisUrl, waitFailed, waitReady } from './helpers/redis.js';
 
 const pool = usePool();
 const config = loadConfig({});
@@ -45,6 +45,7 @@ describe('GET /readyz', () => {
   it('is ok with postgres and redis up', async () => {
     const redis = createRedis(testRedisUrl());
     closers.push(() => redis.disconnect());
+    await waitReady(redis);
     const { res } = await ready(make({ db: pool, redis }));
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
@@ -65,13 +66,14 @@ describe('GET /readyz', () => {
   it('is degraded but 200 when redis is down', async () => {
     const redis = createRedis('redis://127.0.0.1:1');
     closers.push(() => redis.disconnect());
+    await waitFailed(redis);
     const { res, ms } = await ready(make({ db: pool, redis }));
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       status: 'ok',
       checks: { postgres: 'ok', redis: 'down' },
     });
-    expect(ms).toBeLessThan(1500);
+    expect(ms).toBeLessThan(150);
   });
 
   it('returns 503 when postgres is down', async () => {
@@ -85,6 +87,7 @@ describe('GET /readyz', () => {
   it('returns 503 when postgres is down even with redis up', async () => {
     const redis = createRedis(testRedisUrl());
     closers.push(() => redis.disconnect());
+    await waitReady(redis);
     const { res } = await ready(make({ db: badPool(), redis }));
     expect(res.statusCode).toBe(503);
     expect(res.json().checks.postgres).toBe('down');

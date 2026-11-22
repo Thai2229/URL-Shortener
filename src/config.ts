@@ -89,10 +89,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   );
   if (
     !Number.isInteger(clickFlushIntervalSeconds) ||
-    clickFlushIntervalSeconds < 0
+    clickFlushIntervalSeconds < 0 ||
+    clickFlushIntervalSeconds > 86400
   ) {
     throw new Error(
-      `Invalid CLICK_FLUSH_INTERVAL_SECONDS: ${env.CLICK_FLUSH_INTERVAL_SECONDS}`,
+      `Invalid CLICK_FLUSH_INTERVAL_SECONDS: ${env.CLICK_FLUSH_INTERVAL_SECONDS} (expected 0 to 86400)`,
     );
   }
 

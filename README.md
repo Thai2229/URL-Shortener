@@ -55,7 +55,7 @@ If `REDIS_URL` is unset or Redis is down, cache errors are swallowed and redirec
 
 Each successful redirect (302) adds one to a Redis hash (`clicks`, field per code). Every `CLICK_FLUSH_INTERVAL_SECONDS` (default 5, `0` turns the timer off) the server moves that hash to `clicks:processing` and adds the totals to `links.click_count` in one SQL statement. A short Redis lock (`clicks:lock`) keeps replicas from flushing at the same time. On shutdown the server does a final flush.
 
-Counts are eventually consistent: `clickCount` lags by up to the flush interval. Clicks that happen while Redis is down are not counted. A crash can lose up to one interval of unflushed clicks, and a crash between the database write and the cleanup can count one batch twice. That is at-least-once counting, which is fine for analytics. If you set the interval to `0`, run a scheduled job that creates a click counter and calls `flush()`.
+Counts are eventually consistent: `clickCount` lags by up to the flush interval. Clicks that happen while Redis is down are not counted. Counting is at-least-once: a crash or failure between the database write and the cleanup of the in-flight hash (`clicks:processing`) can count one batch twice, while failures before the write lose nothing (the batch is retried). A crash can also lose up to one interval of unflushed clicks. That is fine for analytics. Codes are flushed in sorted order in chunks of 5,000, so concurrent flushers lock rows in the same order. If you set the interval to `0`, run a scheduled job that creates a click counter and calls `flush()`.
 
 ## Rate limiting
 

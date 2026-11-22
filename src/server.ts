@@ -22,6 +22,8 @@ const app = buildApp(config, { db, redis, clicks });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
+    // A dead database must not stall shutdown past the container kill grace.
+    setTimeout(() => process.exit(1), 8000).unref();
     app
       .close()
       .then(() => clicks.stop())

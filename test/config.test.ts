@@ -131,6 +131,7 @@ describe('loadConfig', () => {
       ['10', 10],
       ['1', 1],
       ['0', 0],
+      ['86400', 86400],
     ])('CLICK_FLUSH_INTERVAL_SECONDS=%s -> %j', (value, expected) => {
       const env: Record<string, string> = {};
       if (value !== undefined) {
@@ -139,7 +140,7 @@ describe('loadConfig', () => {
       expect(loadConfig(env).clickFlushIntervalSeconds).toBe(expected);
     });
 
-    it.each(['abc', '-1', '1.5', '1e400', 'NaN'])(
+    it.each(['abc', '-1', '1.5', '1e400', 'NaN', '86401', '2147484', '1e9'])(
       'throws naming the variable on %j',
       (bad) => {
         expect(() => loadConfig({ CLICK_FLUSH_INTERVAL_SECONDS: bad })).toThrow(

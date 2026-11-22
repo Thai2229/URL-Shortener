@@ -58,27 +58,41 @@ export function createClickCounter({
       return null;
     }
     try {
-      // A leftover in-flight hash (failed earlier flush) goes first.
-      if ((await redis.exists(processing)) === 0) {
-        try {
-          await redis.rename(prefix, processing);
-        } catch (err) {
-          if (/no such key/i.test(String((err as Error).message))) {
-            return { codes: 0, clicks: 0 };
+      let total = { codes: 0, clicks: 0 };
+      // Pass 1 applies a leftover in-flight hash (failed earlier flush) and
+      // pass 2 the pending one; without a leftover, one pass is enough.
+      for (let pass = 0; pass < 2; pass++) {
+        const leftover = (await redis.exists(processing)) === 1;
+        if (!leftover) {
+          try {
+            await redis.rename(prefix, processing);
+          } catch (err) {
+            if (/no such key/i.test(String((err as Error).message))) {
+              return total;
+            }
+            throw err;
           }
-          throw err;
+        }
+        const raw = await redis.hgetall(processing);
+        const counts: Record<string, number> = {};
+        let clicks = 0;
+        for (const [code, n] of Object.entries(raw)) {
+          counts[code] = Number(n);
+          clicks += counts[code];
+        }
+        await addClicks(db, counts);
+        // At-least-once: a crash between the write above and this DEL counts
+        // the batch twice; a failure before the write loses nothing.
+        await redis.del(processing);
+        total = {
+          codes: total.codes + Object.keys(counts).length,
+          clicks: total.clicks + clicks,
+        };
+        if (!leftover) {
+          break;
         }
       }
-      const raw = await redis.hgetall(processing);
-      const counts: Record<string, number> = {};
-      let clicks = 0;
-      for (const [code, n] of Object.entries(raw)) {
-        counts[code] = Number(n);
-        clicks += counts[code];
-      }
-      await addClicks(db, counts);
-      await redis.del(processing);
-      return { codes: Object.keys(counts).length, clicks };
+      return total;
     } catch (err) {
       debug('flush failed: %O', err);
       return null;

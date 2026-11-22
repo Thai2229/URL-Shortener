@@ -203,7 +203,7 @@ describe('failure handling', () => {
     expect(await clicks(code)).toBe(1);
   });
 
-  it('applies a leftover processing hash before new pending clicks', async () => {
+  it('one flush applies a leftover processing hash and then the pending hash', async () => {
     const prefix = newPrefix();
     const c = make(prefix);
     const old = await link();
@@ -211,15 +211,57 @@ describe('failure handling', () => {
     await redis.hset(`${prefix}:processing`, old, 7);
     await c.record(fresh);
     const spy = vi.spyOn(pool, 'query');
-    const first = await c.flush();
-    expect(first).toEqual({ codes: 1, clicks: 7 });
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(await c.flush()).toEqual({ codes: 2, clicks: 8 });
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await clicks(old)).toBe(7);
+    expect(await clicks(fresh)).toBe(1);
+    expect(await redis.exists(prefix)).toBe(0);
+    expect(await redis.exists(`${prefix}:processing`)).toBe(0);
+    expect(await c.flush()).toEqual({ codes: 0, clicks: 0 });
+    expect(await clicks(old)).toBe(7);
+    expect(await clicks(fresh)).toBe(1);
+  });
+
+  it('stop with a leftover present leaves nothing pending in redis', async () => {
+    const prefix = newPrefix();
+    const c = make(prefix);
+    const old = await link();
+    const fresh = await link();
+    await redis.hset(`${prefix}:processing`, old, 4);
+    await c.record(fresh);
+    await c.stop();
+    expect(await clicks(old)).toBe(4);
+    expect(await clicks(fresh)).toBe(1);
+    expect(await redis.exists(prefix)).toBe(0);
+    expect(await redis.exists(`${prefix}:processing`)).toBe(0);
+  });
+
+  it('db failure on the second pass returns null, keeps only the second batch and never re-applies the first', async () => {
+    const prefix = newPrefix();
+    const c = make(prefix);
+    const old = await link();
+    const fresh = await link();
+    await redis.hset(`${prefix}:processing`, old, 7);
+    await c.record(fresh);
+    const real = pool.query.bind(pool) as (...a: unknown[]) => Promise<unknown>;
+    let calls = 0;
+    vi.spyOn(pool, 'query').mockImplementation(((...args: unknown[]) => {
+      calls++;
+      if (calls === 2) {
+        return Promise.reject(new Error('db down'));
+      }
+      return real(...args);
+    }) as never);
+    expect(await c.flush()).toBeNull();
     expect(await clicks(old)).toBe(7);
     expect(await clicks(fresh)).toBe(0);
-    expect(await redis.hget(prefix, fresh)).toBe('1');
+    expect(await redis.hget(`${prefix}:processing`, fresh)).toBe('1');
+    expect(await redis.hget(`${prefix}:processing`, old)).toBeNull();
+    expect(await redis.exists(prefix)).toBe(0);
+    vi.restoreAllMocks();
     expect(await c.flush()).toEqual({ codes: 1, clicks: 1 });
-    expect(await clicks(fresh)).toBe(1);
     expect(await clicks(old)).toBe(7);
+    expect(await clicks(fresh)).toBe(1);
   });
 
   it('returns null and touches nothing when the lock is held by another token', async () => {

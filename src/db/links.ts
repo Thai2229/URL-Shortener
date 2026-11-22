@@ -24,6 +24,7 @@ interface LinkRow {
   click_count: string;
 }
 
+const CHUNK_SIZE = 5000;
 const COLUMNS = 'id, code, target_url, created_at, expires_at, click_count';
 
 function toLink(row: LinkRow): Link {
@@ -72,15 +73,21 @@ export async function addClicks(
   db: pg.Pool,
   counts: Record<string, number>,
 ): Promise<number> {
-  const codes = Object.keys(counts);
-  if (codes.length === 0) {
-    return 0;
+  // Sorted so concurrent flushers lock rows in the same order (no deadlocks).
+  const codes = Object.keys(counts).sort();
+  let updated = 0;
+  for (let i = 0; i < codes.length; i += CHUNK_SIZE) {
+    const chunk = codes.slice(i, i + CHUNK_SIZE);
+    const result = await db.query(
+      `UPDATE links SET click_count = click_count + v.n
+       FROM (
+         SELECT unnest($1::text[]) AS code, unnest($2::bigint[]) AS n
+         ORDER BY code
+       ) v
+       WHERE links.code = v.code`,
+      [chunk, chunk.map((code) => String(counts[code]))],
+    );
+    updated += result.rowCount ?? 0;
   }
-  const result = await db.query(
-    `UPDATE links SET click_count = click_count + v.n
-     FROM (SELECT unnest($1::text[]) AS code, unnest($2::bigint[]) AS n) v
-     WHERE links.code = v.code`,
-    [codes, codes.map((code) => String(counts[code]))],
-  );
-  return result.rowCount ?? 0;
+  return updated;
 }

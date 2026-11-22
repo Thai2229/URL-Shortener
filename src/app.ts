@@ -67,6 +67,14 @@ export function buildApp(
       return randomUUID();
     },
     trustProxy: trustProxy as boolean,
+    // Router errors (e.g. FST_ERR_BAD_URL) never reach the error handler's path-free body otherwise.
+    // Hooks have not run at this point, so the standard headers are set here.
+    frameworkErrors: (_err, request, reply) =>
+      (reply as FastifyReply)
+        .code(400)
+        .header('x-request-id', request.id)
+        .header('x-content-type-options', 'nosniff')
+        .send({ error: { code: 'bad_request', message: 'Invalid request' } }),
   });
   // Fastify parses text/plain by default; only JSON is accepted here (else 415).
   app.removeContentTypeParser('text/plain');
@@ -86,6 +94,7 @@ export function buildApp(
   };
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-request-id', request.id);
+    reply.header('x-content-type-options', 'nosniff');
   });
   if (metrics) {
     app.addHook('onResponse', async (request, reply) => {

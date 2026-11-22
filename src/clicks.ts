@@ -25,7 +25,7 @@ export function createClickCounter({
   lockSeconds = 30,
   metrics,
 }: {
-  redis: Redis | undefined;
+  redis?: Redis | undefined;
   db: pg.Pool;
   prefix?: string;
   lockSeconds?: number;

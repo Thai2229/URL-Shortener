@@ -38,7 +38,7 @@ function waitText(seconds) {
 
 function messageFor(status, code, retryAfter) {
   if (code === 'invalid_url') {
-    return 'That address is not allowed. Use an http or https link of up to 2048 characters, without a username or password, that does not point back at this service.';
+    return 'That address is not allowed. Use an http or https link of up to 2048 characters, without a username or password, that does not point back at this service or at a private or loopback address.';
   }
   if (code === 'invalid_expiry') {
     return 'The expiry date must be in the future and within 10 years.';
@@ -114,7 +114,12 @@ async function onSubmit(event) {
     } catch {
       data = null;
     }
-    if (res.status === 201 && data && typeof data.shortUrl === 'string') {
+    if (
+      res.status === 201 &&
+      data &&
+      typeof data.shortUrl === 'string' &&
+      /^https?:\/\//.test(data.shortUrl)
+    ) {
       showResult(data);
     } else {
       const code = data && data.error && data.error.code;

@@ -42,13 +42,14 @@ export const linksRoutes: FastifyPluginAsync<{
         expiresAt?: unknown;
       } | null;
       const targetUrl =
-        typeof body?.url === 'string' && validateUrl(body.url, config.baseUrl);
+        typeof body?.url === 'string' &&
+        validateUrl(body.url, config.baseUrl, config.allowPrivateTargets);
       if (!targetUrl) {
         return fail(
           reply,
           400,
           'invalid_url',
-          'url must be an http(s) URL of at most 2048 characters, without credentials, and not point at this service',
+          'url must be an http(s) URL of at most 2048 characters, without credentials, and not point at this service or at a private or loopback address',
         );
       }
       let expiresAt: Date | null = null;
@@ -155,7 +156,9 @@ export const linksRoutes: FastifyPluginAsync<{
       if (expiresAt && expiresAt.getTime() <= Date.now()) {
         return fail(reply, 410, 'expired', 'Link has expired');
       }
-      await clicks?.record(code);
+      if (request.method !== 'HEAD') {
+        await clicks?.record(code);
+      }
       return reply.header('Cache-Control', 'no-store').redirect(url, 302);
     },
   );

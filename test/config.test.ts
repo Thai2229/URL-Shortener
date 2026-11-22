@@ -8,6 +8,7 @@ describe('loadConfig', () => {
       host: '0.0.0.0',
       logLevel: 'info',
       baseUrl: 'http://localhost:3000',
+      allowPrivateTargets: false,
       databaseUrl: undefined,
       redisUrl: undefined,
       rateLimit: {
@@ -45,6 +46,52 @@ describe('loadConfig', () => {
   it('throws on invalid LOG_LEVEL or BASE_URL', () => {
     expect(() => loadConfig({ LOG_LEVEL: 'loud' })).toThrow(/LOG_LEVEL/);
     expect(() => loadConfig({ BASE_URL: 'not a url' })).toThrow(/BASE_URL/);
+  });
+
+  describe('BASE_URL scheme', () => {
+    it.each([
+      'javascript:alert(1)',
+      'ftp://x',
+      'data:text/plain,x',
+      'file:///x',
+    ])('rejects %s', (BASE_URL) => {
+      expect(() => loadConfig({ BASE_URL })).toThrow(/BASE_URL/);
+    });
+
+    it.each([
+      ['http://localhost:3000', 'http://localhost:3000'],
+      ['https://short.example', 'https://short.example'],
+      ['https://short.example/', 'https://short.example/'],
+    ])('accepts %s', (BASE_URL, expected) => {
+      expect(loadConfig({ BASE_URL }).baseUrl).toBe(expected);
+    });
+  });
+
+  describe('ALLOW_PRIVATE_TARGETS', () => {
+    it('defaults to false', () => {
+      expect(loadConfig({}).allowPrivateTargets).toBe(false);
+      expect(
+        loadConfig({ ALLOW_PRIVATE_TARGETS: '' }).allowPrivateTargets,
+      ).toBe(false);
+    });
+
+    it.each(['true', '1', 'on', 'yes', 'TRUE'])('%s enables it', (v) => {
+      expect(loadConfig({ ALLOW_PRIVATE_TARGETS: v }).allowPrivateTargets).toBe(
+        true,
+      );
+    });
+
+    it.each(['false', '0', 'off', 'no'])('%s disables it', (v) => {
+      expect(loadConfig({ ALLOW_PRIVATE_TARGETS: v }).allowPrivateTargets).toBe(
+        false,
+      );
+    });
+
+    it('throws naming the variable on junk', () => {
+      expect(() => loadConfig({ ALLOW_PRIVATE_TARGETS: 'maybe' })).toThrow(
+        /ALLOW_PRIVATE_TARGETS/,
+      );
+    });
   });
 
   describe('rate limit', () => {

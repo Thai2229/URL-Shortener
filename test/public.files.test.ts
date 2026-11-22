@@ -53,6 +53,11 @@ describe('public/app.js', () => {
     expect(exists).toBe(true);
     expect(js).toMatch(/fetch\(\s*['"]\/api\/links['"]/);
   });
+  it('only sets the result href when shortUrl is http(s)', () => {
+    const regexCheck = /\/\^https\?:\\\/\\\//.test(js);
+    const urlCheck = /new\s+URL\([^)]*shortUrl[^)]*\)\.protocol/.test(js);
+    expect(regexCheck || urlCheck).toBe(true);
+  });
   it('avoids eval, new Function, innerHTML and document.write', () => {
     expect(js).not.toMatch(/\beval\s*\(/);
     expect(js).not.toMatch(/new\s+Function\b/);

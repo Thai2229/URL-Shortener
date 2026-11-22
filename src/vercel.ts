@@ -53,8 +53,9 @@ export function createServerless(opts: {
     app.addHook('onSend', async (request, reply, payload) => {
       const route = request.routeOptions.url;
       if (
-        reply.statusCode === 302 ||
-        (reply.statusCode === 200 && route === '/api/links/:code')
+        request.method !== 'HEAD' &&
+        (reply.statusCode === 302 ||
+          (reply.statusCode === 200 && route === '/api/links/:code'))
       ) {
         keepAlive(clicks.flushIfDue(intervalMs));
       }

@@ -164,6 +164,28 @@ describe('request flow over HTTP', () => {
     expect((await findLinkByCode(pool, code))?.clickCount).toBe(1);
   });
 
+  it('HEAD redirects without a click or a waitUntil, GET still counts', async () => {
+    const { base, waitUntil, s } = await start();
+    const { code } = (await (await create(base)).json()) as { code: string };
+    const head = await fetch(`${base}/${code}`, {
+      method: 'HEAD',
+      redirect: 'manual',
+    });
+    expect(head.status).toBe(302);
+    expect(head.headers.get('location')).toBe('https://example.com/v');
+    await sleep(200);
+    expect(waitUntil).not.toHaveBeenCalled();
+    const get = await fetch(`${base}/${code}`, { redirect: 'manual' });
+    expect(get.status).toBe(302);
+    for (let i = 0; i < 50 && waitUntil.mock.calls.length === 0; i++) {
+      await sleep(20);
+    }
+    expect(waitUntil).toHaveBeenCalledTimes(1);
+    await waitUntil.mock.calls[0]![0];
+    expect((await findLinkByCode(pool, code))?.clickCount).toBe(1);
+    void s;
+  });
+
   it('calls waitUntil once per 302 and never for other statuses', async () => {
     const { base, waitUntil } = await start();
     const { code } = (await (await create(base)).json()) as { code: string };

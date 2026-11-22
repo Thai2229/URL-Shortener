@@ -26,7 +26,7 @@ npm run dev
 
 ## API
 
-Create a link. `expiresAt` is optional and must be a future ISO date. Only `http` and `https` URLs up to 2048 characters are accepted, without credentials and not pointing at `BASE_URL`'s own host. Returns `201` with `code`, `shortUrl`, `url` and `expiresAt`.
+Create a link. `expiresAt` is optional and must be a future ISO date. Only `http` and `https` URLs up to 2048 characters are accepted, without credentials, not pointing at `BASE_URL`'s own host, and not pointing at private or loopback addresses (`localhost`, `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `169.254.0.0/16`, `100.64.0.0/10`, `0.0.0.0/8` and their IPv6 and IPv4-mapped forms). Set `ALLOW_PRIVATE_TARGETS=true` to allow those targets in local development only; the own-host check still applies. Returns `201` with `code`, `shortUrl`, `url` and `expiresAt`.
 
 ```sh
 curl -X POST localhost:3000/api/links \
@@ -100,7 +100,7 @@ Cache hit ratio:
 sum(rate(redirect_cache_total{result="hit"}[5m])) / sum(rate(redirect_cache_total[5m]))
 ```
 
-Every response carries an `x-request-id` header. A valid incoming one (`A-Z a-z 0-9 . _ -`, up to 64 characters) is reused; otherwise a UUID is generated. The same value is `reqId` in the log lines. Request lines log the method, the path without the query string, the status and the request id; headers and query strings are never logged. Each request writes log lines, so set `LOG_LEVEL=warn` during load tests.
+`HEAD /:code` returns the same redirect as `GET` but is not counted as a click. Every response carries `X-Content-Type-Options: nosniff`. Every response carries an `x-request-id` header. A valid incoming one (`A-Z a-z 0-9 . _ -`, up to 64 characters) is reused; otherwise a UUID is generated. The same value is `reqId` in the log lines. Request lines log the method, the path without the query string, the status and the request id; headers and query strings are never logged. Each request writes log lines, so set `LOG_LEVEL=warn` during load tests.
 
 ## Scaling out
 

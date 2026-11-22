@@ -27,9 +27,13 @@ const slashApp = buildApp(testConfig({ BASE_URL: 'http://Short.Test:8080/' }), {
 const shoApp = buildApp(testConfig({ BASE_URL: 'https://sho.rt' }), {
   db: pool,
 });
-const localApp = buildApp(testConfig({ BASE_URL: 'http://localhost:3000' }), {
-  db: pool,
-});
+const localApp = buildApp(
+  testConfig({
+    BASE_URL: 'http://localhost:3000',
+    ALLOW_PRIVATE_TARGETS: 'true',
+  }),
+  { db: pool },
+);
 let realGenerate: typeof generateCode;
 
 beforeAll(async () => {

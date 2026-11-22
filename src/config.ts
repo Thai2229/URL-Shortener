@@ -13,6 +13,7 @@ export interface Config {
   host: string;
   logLevel: string;
   baseUrl: string;
+  allowPrivateTargets: boolean;
   vercel: boolean;
   databaseUrl: string | undefined;
   redisUrl: string | undefined;
@@ -149,7 +150,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     }
   }
   baseUrl = baseUrl || 'http://localhost:3000';
-  if (!URL.canParse(baseUrl)) {
+  if (
+    !URL.canParse(baseUrl) ||
+    (new URL(baseUrl).protocol !== 'http:' &&
+      new URL(baseUrl).protocol !== 'https:')
+  ) {
     throw new Error(`Invalid BASE_URL: ${baseUrl}`);
   }
 
@@ -193,6 +198,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     host: env.HOST || '0.0.0.0',
     logLevel,
     baseUrl,
+    allowPrivateTargets: parseEnabled(
+      env.ALLOW_PRIVATE_TARGETS || 'false',
+      'ALLOW_PRIVATE_TARGETS',
+    ),
     vercel,
     databaseUrl: env.DATABASE_URL || undefined,
     redisUrl: env.REDIS_URL || env.KV_URL || undefined,

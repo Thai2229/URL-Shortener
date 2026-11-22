@@ -23,6 +23,7 @@ export interface Config {
     readMax: number;
   };
   trustProxy: boolean | number | string[];
+  clickFlushIntervalSeconds: number;
 }
 
 function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
@@ -83,6 +84,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid BASE_URL: ${baseUrl}`);
   }
 
+  const clickFlushIntervalSeconds = Number(
+    env.CLICK_FLUSH_INTERVAL_SECONDS || 5,
+  );
+  if (
+    !Number.isInteger(clickFlushIntervalSeconds) ||
+    clickFlushIntervalSeconds < 0
+  ) {
+    throw new Error(
+      `Invalid CLICK_FLUSH_INTERVAL_SECONDS: ${env.CLICK_FLUSH_INTERVAL_SECONDS}`,
+    );
+  }
+
   return {
     port,
     host: env.HOST || '0.0.0.0',
@@ -98,5 +111,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       readMax: positiveInt(env, 'RATE_LIMIT_READ_MAX', 120),
     },
     trustProxy: parseTrustProxy(env.TRUST_PROXY),
+    clickFlushIntervalSeconds,
   };
 }

@@ -67,3 +67,20 @@ export async function findLinkByCode(
   }
   return toLink(rows[0]);
 }
+
+export async function addClicks(
+  db: pg.Pool,
+  counts: Record<string, number>,
+): Promise<number> {
+  const codes = Object.keys(counts);
+  if (codes.length === 0) {
+    return 0;
+  }
+  const result = await db.query(
+    `UPDATE links SET click_count = click_count + v.n
+     FROM (SELECT unnest($1::text[]) AS code, unnest($2::bigint[]) AS n) v
+     WHERE links.code = v.code`,
+    [codes, codes.map((code) => String(counts[code]))],
+  );
+  return result.rowCount ?? 0;
+}

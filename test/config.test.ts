@@ -18,6 +18,7 @@ describe('loadConfig', () => {
         readMax: 120,
       },
       trustProxy: false,
+      clickFlushIntervalSeconds: 5,
     });
   });
 
@@ -122,5 +123,29 @@ describe('loadConfig', () => {
       }
       expect(loadConfig(env).trustProxy).toEqual(expected);
     });
+  });
+
+  describe('clickFlushIntervalSeconds', () => {
+    it.each([
+      [undefined, 5],
+      ['10', 10],
+      ['1', 1],
+      ['0', 0],
+    ])('CLICK_FLUSH_INTERVAL_SECONDS=%s -> %j', (value, expected) => {
+      const env: Record<string, string> = {};
+      if (value !== undefined) {
+        env.CLICK_FLUSH_INTERVAL_SECONDS = value;
+      }
+      expect(loadConfig(env).clickFlushIntervalSeconds).toBe(expected);
+    });
+
+    it.each(['abc', '-1', '1.5', '1e400', 'NaN'])(
+      'throws naming the variable on %j',
+      (bad) => {
+        expect(() => loadConfig({ CLICK_FLUSH_INTERVAL_SECONDS: bad })).toThrow(
+          /CLICK_FLUSH_INTERVAL_SECONDS/,
+        );
+      },
+    );
   });
 });

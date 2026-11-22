@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis';
 import { buildApp } from './app.js';
+import { createClickCounter } from './clicks.js';
 import { loadConfig } from './config.js';
 import { createPool } from './db/pool.js';
 import { createRedis } from './redis.js';
@@ -13,12 +14,17 @@ let redis: Redis | undefined;
 if (config.redisUrl) {
   redis = createRedis(config.redisUrl);
 }
-const app = buildApp(config, { db, redis });
+const clicks = createClickCounter({ redis, db });
+if (redis && config.clickFlushIntervalSeconds > 0) {
+  clicks.start(config.clickFlushIntervalSeconds * 1000);
+}
+const app = buildApp(config, { db, redis, clicks });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {
     app
       .close()
+      .then(() => clicks.stop())
       .then(() => redis?.quit().catch(() => redis?.disconnect()))
       .then(() => db.end())
       .then(

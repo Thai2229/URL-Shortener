@@ -1,12 +1,16 @@
 import Fastify, { type FastifyReply } from 'fastify';
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
+import type { ClickCounter } from './clicks.js';
 import type { Config } from './config.js';
 import { registerRateLimit } from './ratelimit.js';
 import { healthRoutes } from './routes/health.js';
 import { linksRoutes } from './routes/links.js';
 
-export function buildApp(config: Config, deps: { db: pg.Pool; redis?: Redis }) {
+export function buildApp(
+  config: Config,
+  deps: { db: pg.Pool; redis?: Redis; clicks?: ClickCounter },
+) {
   const app = Fastify({
     logger: process.env.NODE_ENV !== 'test' && { level: config.logLevel },
     // Fastify accepts a hop count at runtime; its types omit the number form.
@@ -52,6 +56,11 @@ export function buildApp(config: Config, deps: { db: pg.Pool; redis?: Redis }) {
     app.setNotFoundHandler(notFound);
   }
   app.register(healthRoutes, { db: deps.db, redis: deps.redis });
-  app.register(linksRoutes, { config, db: deps.db, redis: deps.redis });
+  app.register(linksRoutes, {
+    config,
+    db: deps.db,
+    redis: deps.redis,
+    clicks: deps.clicks,
+  });
   return app;
 }

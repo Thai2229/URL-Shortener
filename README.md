@@ -51,6 +51,12 @@ If `REDIS_URL` is unset or Redis is down, cache errors are swallowed and redirec
 
 `GET /readyz` returns `200` with `{ status, checks: { postgres, redis } }`. Postgres must be `ok`, otherwise it returns `503`. Redis is `ok`, `down` (still `200`) or `disabled`. `GET /healthz` stays a plain liveness check.
 
+## Click counting
+
+Each successful redirect (302) adds one to a Redis hash (`clicks`, field per code). Every `CLICK_FLUSH_INTERVAL_SECONDS` (default 5, `0` turns the timer off) the server moves that hash to `clicks:processing` and adds the totals to `links.click_count` in one SQL statement. A short Redis lock (`clicks:lock`) keeps replicas from flushing at the same time. On shutdown the server does a final flush.
+
+Counts are eventually consistent: `clickCount` lags by up to the flush interval. Clicks that happen while Redis is down are not counted. A crash can lose up to one interval of unflushed clicks, and a crash between the database write and the cleanup can count one batch twice. That is at-least-once counting, which is fine for analytics. If you set the interval to `0`, run a scheduled job that creates a click counter and calls `flush()`.
+
 ## Rate limiting
 
 Limits are per client IP, in fixed windows of `RATE_LIMIT_WINDOW_SECONDS` (default 60). Each route has its own bucket:

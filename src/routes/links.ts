@@ -4,6 +4,7 @@ import type pg from 'pg';
 import type { CachedLink } from '../cache.js';
 import { cacheLink, cacheMissing, getCachedLink } from '../cache.js';
 import { generateCode } from '../code.js';
+import type { ClickCounter } from '../clicks.js';
 import type { Config } from '../config.js';
 import { findLinkByCode, insertLink } from '../db/links.js';
 import type { Link } from '../db/links.js';
@@ -25,7 +26,8 @@ export const linksRoutes: FastifyPluginAsync<{
   config: Config;
   db: pg.Pool;
   redis?: Redis;
-}> = async (app, { config, db, redis }) => {
+  clicks?: ClickCounter;
+}> = async (app, { config, db, redis, clicks }) => {
   const shortBase = config.baseUrl.replace(/\/+$/, '');
   const shortUrl = (code: string) => `${shortBase}/${code}`;
 
@@ -148,6 +150,7 @@ export const linksRoutes: FastifyPluginAsync<{
       if (expiresAt && expiresAt.getTime() <= Date.now()) {
         return fail(reply, 410, 'expired', 'Link has expired');
       }
+      await clicks?.record(code);
       return reply.header('Cache-Control', 'no-store').redirect(url, 302);
     },
   );

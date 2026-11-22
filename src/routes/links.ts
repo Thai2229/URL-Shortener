@@ -1,0 +1,111 @@
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type pg from 'pg';
+import { generateCode } from '../code.js';
+import type { Config } from '../config.js';
+import { findLinkByCode, insertLink } from '../db/links.js';
+import type { Link } from '../db/links.js';
+import { validateExpiry, validateUrl } from '../validate.js';
+
+const CODE_PATTERN = /^[A-Za-z0-9_-]{1,32}$/;
+const MAX_ATTEMPTS = 5;
+
+function fail(
+  reply: FastifyReply,
+  status: number,
+  code: string,
+  message: string,
+) {
+  return reply.code(status).send({ error: { code, message } });
+}
+
+export const linksRoutes: FastifyPluginAsync<{
+  config: Config;
+  db: pg.Pool;
+}> = async (app, { config, db }) => {
+  const shortBase = config.baseUrl.replace(/\/+$/, '');
+  const shortUrl = (code: string) => `${shortBase}/${code}`;
+
+  app.post('/api/links', async (request, reply) => {
+    const body = request.body as { url?: unknown; expiresAt?: unknown } | null;
+    const targetUrl =
+      typeof body?.url === 'string' && validateUrl(body.url, config.baseUrl);
+    if (!targetUrl) {
+      return fail(
+        reply,
+        400,
+        'invalid_url',
+        'url must be an http(s) URL of at most 2048 characters, without credentials, and not point at this service',
+      );
+    }
+    let expiresAt: Date | null = null;
+    if (body?.expiresAt !== undefined) {
+      expiresAt = validateExpiry(body.expiresAt);
+      if (!expiresAt) {
+        return fail(
+          reply,
+          400,
+          'invalid_expiry',
+          'expiresAt must be an ISO date in the future',
+        );
+      }
+    }
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+      const link = await insertLink(db, {
+        code: generateCode(),
+        targetUrl,
+        expiresAt,
+      });
+      if (link) {
+        return reply.code(201).send({
+          code: link.code,
+          shortUrl: shortUrl(link.code),
+          url: link.targetUrl,
+          expiresAt: link.expiresAt?.toISOString() ?? null,
+        });
+      }
+    }
+    throw new Error('could not generate a unique code');
+  });
+
+  async function lookup(code: string, reply: FastifyReply) {
+    let link: Link | null = null;
+    if (CODE_PATTERN.test(code)) {
+      link = await findLinkByCode(db, code);
+    }
+    if (!link) {
+      fail(reply, 404, 'not_found', 'Link not found');
+    }
+    return link;
+  }
+
+  app.get<{ Params: { code: string } }>(
+    '/api/links/:code',
+    async (request, reply) => {
+      const link = await lookup(request.params.code, reply);
+      if (!link) {
+        return reply;
+      }
+      return {
+        code: link.code,
+        shortUrl: shortUrl(link.code),
+        url: link.targetUrl,
+        createdAt: link.createdAt.toISOString(),
+        expiresAt: link.expiresAt?.toISOString() ?? null,
+        clickCount: link.clickCount,
+      };
+    },
+  );
+
+  app.get<{ Params: { code: string } }>('/:code', async (request, reply) => {
+    const link = await lookup(request.params.code, reply);
+    if (!link) {
+      return reply;
+    }
+    if (link.expiresAt && link.expiresAt.getTime() <= Date.now()) {
+      return fail(reply, 410, 'expired', 'Link has expired');
+    }
+    return reply
+      .header('Cache-Control', 'no-store')
+      .redirect(link.targetUrl, 302);
+  });
+};

@@ -1,6 +1,6 @@
 # URL Shortener
 
-A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. Only the scaffold exists so far (a `/healthz` endpoint). See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
+A URL shortener built to scale horizontally: Fastify API, PostgreSQL as the source of truth, Redis for caching. So far it has the core API (create, redirect, metadata) and `/healthz`; caching, rate limiting and click counting come later. See [docs/PLAN.md](docs/PLAN.md) for the architecture and build steps.
 
 ## Quickstart
 
@@ -18,6 +18,30 @@ Without Docker for the API (needs Node 22):
 npm install
 npm run dev
 ```
+
+## API
+
+Create a link. `expiresAt` is optional and must be a future ISO date. Only `http` and `https` URLs up to 2048 characters are accepted, without credentials and not pointing at `BASE_URL`'s own host. Returns `201` with `code`, `shortUrl`, `url` and `expiresAt`.
+
+```sh
+curl -X POST localhost:3000/api/links \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://example.com/page","expiresAt":"2030-01-01T00:00:00Z"}'
+```
+
+Follow a short link. Returns `302` to the target, `404` for an unknown code and `410` once the link has expired.
+
+```sh
+curl -i localhost:3000/aB3dE9x
+```
+
+Read link metadata (`code`, `shortUrl`, `url`, `createdAt`, `expiresAt`, `clickCount`). It still works for expired links.
+
+```sh
+curl localhost:3000/api/links/aB3dE9x
+```
+
+Errors have the form `{ "error": { "code", "message" } }`, with codes `invalid_url`, `invalid_expiry`, `not_found`, `expired` and `internal_error`.
 
 ## Scripts
 

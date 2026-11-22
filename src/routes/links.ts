@@ -128,12 +128,16 @@ export const linksRoutes: FastifyPluginAsync<{
         url = cached.url;
         expiresAt = cached.expiresAt;
       } else {
-        const link = await lookup(code, reply);
+        let link: Link | null = null;
+        if (valid) {
+          link = await findLinkByCode(db, code);
+        }
         if (!link) {
           if (valid) {
             await cacheMissing(redis, code);
           }
-          return reply;
+          // Reply only after the marker is written, so the 404 never races it.
+          return fail(reply, 404, 'not_found', 'Link not found');
         }
         url = link.targetUrl;
         expiresAt = link.expiresAt;

@@ -35,7 +35,8 @@ services:
 
   api:
     build: .
-    command: ['sh', '-c', 'node dist/scripts/migrate.js && node dist/server.js']
+    command:
+      ['sh', '-c', 'node dist/scripts/migrate.js && exec node dist/server.js']
     depends_on:
       postgres:
         condition: service_healthy

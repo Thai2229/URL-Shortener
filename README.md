@@ -24,7 +24,7 @@ npm run dev
 - `npm run dev`: start with file watching (tsx)
 - `npm run build`: compile to `dist/`
 - `npm start`: run the compiled server
-- `npm test`: run Vitest
+- `npm test`: run Vitest. It needs a `urlshortener_test` database (`TEST_DATABASE_URL`); create it once with `docker compose exec postgres createdb -U urlshortener urlshortener_test`.
 - `npm run lint`: ESLint
 - `npm run typecheck`: `tsc --noEmit`
 - `npm run format`: Prettier

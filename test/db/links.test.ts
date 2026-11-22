@@ -109,7 +109,7 @@ describe('links data layer', () => {
   ])('rejects a code with invalid characters (%s)', async (_name, code) => {
     await expect(
       insertLink(pool, { code, targetUrl: 'https://example.com/c' }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: '23514' });
   });
 
   it('rejects a code longer than 32 chars', async () => {
@@ -118,7 +118,7 @@ describe('links data layer', () => {
         code: 'a'.repeat(33),
         targetUrl: 'https://example.com/d',
       }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: '23514' });
   });
 
   it('rejects a target_url longer than 2048 chars', async () => {
@@ -126,6 +126,6 @@ describe('links data layer', () => {
     expect(targetUrl).toHaveLength(2049);
     await expect(
       insertLink(pool, { code: uniqueCode(), targetUrl }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ code: '23514' });
   });
 });

@@ -15,6 +15,8 @@ export async function migrate(
   // Advisory locks are per-session, so hold one dedicated client throughout.
   const client = await pool.connect();
   try {
+    // Waiting on the lock and long migrations must not hit the pool's 5s cap.
+    await client.query('SET statement_timeout = 0');
     await client.query('SELECT pg_advisory_lock($1)', [LOCK_ID]);
     await client.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -38,16 +40,20 @@ export async function migrate(
         ]);
         await client.query('COMMIT');
       } catch (err) {
-        await client.query('ROLLBACK');
+        await client.query('ROLLBACK').catch(() => {});
         throw err;
       }
       applied.push(name);
     }
   } finally {
-    await client
+    const unlocked = await client
       .query('SELECT pg_advisory_unlock($1)', [LOCK_ID])
-      .catch(() => {});
-    client.release();
+      .then(
+        () => true,
+        () => false,
+      );
+    // Destroy the client if the unlock failed so no session keeps the lock.
+    client.release(!unlocked);
   }
   return applied;
 }

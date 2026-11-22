@@ -14,7 +14,14 @@
     "db:migrate": "tsx src/scripts/migrate.ts",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.test.json",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "loadtest:seed": "tsx loadtest/seed.ts",
+    "loadtest:smoke": "mkdir -p loadtest/results && ${K6:-k6} run loadtest/smoke.js",
+    "loadtest:redirect": "mkdir -p loadtest/results && ${K6:-k6} run loadtest/redirect.js",
+    "loadtest:mixed": "mkdir -p loadtest/results && ${K6:-k6} run loadtest/mixed.js",
+    "loadtest:spike": "mkdir -p loadtest/results && ${K6:-k6} run loadtest/spike.js",
+    "loadtest:ratelimit": "mkdir -p loadtest/results && ${K6:-k6} run loadtest/ratelimit.js",
+    "loadtest": "loadtest/run.sh"
   },
   "dependencies": {
     "@fastify/rate-limit": "^11.3.0",

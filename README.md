@@ -97,6 +97,10 @@ sum(rate(redirect_cache_total{result="hit"}[5m])) / sum(rate(redirect_cache_tota
 
 Every response carries an `x-request-id` header. A valid incoming one (`A-Z a-z 0-9 . _ -`, up to 64 characters) is reused; otherwise a UUID is generated. The same value is `reqId` in the log lines. Request lines log the method, the path without the query string, the status and the request id; headers and query strings are never logged. Each request writes log lines, so set `LOG_LEVEL=warn` during load tests.
 
+## Load testing
+
+k6 scenarios, a seed script and results are in [docs/LOADTEST.md](docs/LOADTEST.md). Run `npm run loadtest:seed` then `npm run loadtest`.
+
 ## Scripts
 
 - `npm run dev`: start with file watching (tsx)

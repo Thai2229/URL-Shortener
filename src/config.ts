@@ -24,6 +24,8 @@ export interface Config {
   };
   trustProxy: boolean | number | string[];
   clickFlushIntervalSeconds: number;
+  metricsEnabled: boolean;
+  metricsToken: string | undefined;
 }
 
 function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
@@ -34,7 +36,7 @@ function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number) {
   return value;
 }
 
-function parseEnabled(value: string | undefined) {
+function parseEnabled(value: string | undefined, name: string) {
   const v = (value ?? '').trim().toLowerCase();
   if (['false', '0', 'off', 'no'].includes(v)) {
     return false;
@@ -42,7 +44,7 @@ function parseEnabled(value: string | undefined) {
   if (v === '' || ['true', '1', 'on', 'yes'].includes(v)) {
     return true;
   }
-  throw new Error(`Invalid RATE_LIMIT_ENABLED: ${value}`);
+  throw new Error(`Invalid ${name}: ${value}`);
 }
 
 function parseTrustProxy(value: string | undefined) {
@@ -97,6 +99,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
+  const metricsToken = env.METRICS_TOKEN || undefined;
+  if (metricsToken !== undefined && metricsToken.length < 16) {
+    throw new Error('Invalid METRICS_TOKEN: must be at least 16 characters');
+  }
+
   return {
     port,
     host: env.HOST || '0.0.0.0',
@@ -105,7 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: env.DATABASE_URL || undefined,
     redisUrl: env.REDIS_URL || undefined,
     rateLimit: {
-      enabled: parseEnabled(env.RATE_LIMIT_ENABLED),
+      enabled: parseEnabled(env.RATE_LIMIT_ENABLED, 'RATE_LIMIT_ENABLED'),
       windowSeconds: positiveInt(env, 'RATE_LIMIT_WINDOW_SECONDS', 60),
       createMax: positiveInt(env, 'RATE_LIMIT_CREATE_MAX', 20),
       redirectMax: positiveInt(env, 'RATE_LIMIT_REDIRECT_MAX', 600),
@@ -113,5 +120,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     trustProxy: parseTrustProxy(env.TRUST_PROXY),
     clickFlushIntervalSeconds,
+    metricsEnabled: parseEnabled(env.METRICS_ENABLED, 'METRICS_ENABLED'),
+    metricsToken,
   };
 }

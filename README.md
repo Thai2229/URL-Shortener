@@ -75,6 +75,28 @@ Counters live in Redis under `rl:{route}:{ip}`, so all replicas share them. If R
 
 Warning: behind a proxy or load balancer, set `TRUST_PROXY` so the real client IP is used; otherwise every client shares the proxy's IP. Leave it unset when clients connect directly. `TRUST_PROXY=true` is only safe when the proxy or platform overwrites `X-Forwarded-For`; otherwise clients pick their own IP and dodge the limits, so use a hop count such as `1` or a comma-separated list of proxy IPs/CIDRs. An invalid forwarded address is ignored and the socket address is used. `/healthz` and `/readyz` are unlimited, so they should not be public (Step 9 keeps them internal).
 
+## Metrics
+
+`GET /metrics` serves Prometheus text. It is never rate limited, and `METRICS_ENABLED=false` turns it into a 404.
+
+**`/metrics` is unauthenticated unless `METRICS_TOKEN` is set.** Keep it internal at the proxy, or set a token of at least 16 characters and scrape with `Authorization: Bearer <token>`.
+
+Series (plus the default Node process metrics):
+
+- `http_request_duration_seconds{method,route,status_code}`: histogram. `route` is the route pattern (`/:code`), or `unmatched` for unknown paths.
+- `redirect_cache_total{result}`: `hit`, `miss` (Postgres lookup) or `negative`.
+- `rate_limit_rejected_total{route}`: 429 responses.
+- `clicks_recorded_total`, `click_flush_total{result}` (`ok`, `skipped`, `error`), `click_flush_duration_seconds`.
+- `pg_pool_connections{state}` (`total`, `idle`, `waiting`) and `redis_ready` (1 or 0), read at scrape time.
+
+Cache hit ratio:
+
+```promql
+sum(rate(redirect_cache_total{result="hit"}[5m])) / sum(rate(redirect_cache_total[5m]))
+```
+
+Every response carries an `x-request-id` header. A valid incoming one (`A-Z a-z 0-9 . _ -`, up to 64 characters) is reused; otherwise a UUID is generated. The same value is `reqId` in the log lines. `authorization` and `cookie` headers are redacted from logs. Each request writes log lines, so set `LOG_LEVEL=warn` during load tests.
+
 ## Scripts
 
 - `npm run dev`: start with file watching (tsx)

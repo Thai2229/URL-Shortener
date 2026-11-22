@@ -6,6 +6,7 @@ import { cacheLink, cacheMissing, getCachedLink } from '../cache.js';
 import { generateCode } from '../code.js';
 import type { ClickCounter } from '../clicks.js';
 import type { Config } from '../config.js';
+import type { Metrics } from '../metrics.js';
 import { findLinkByCode, insertLink } from '../db/links.js';
 import type { Link } from '../db/links.js';
 import { validateExpiry, validateUrl } from '../validate.js';
@@ -27,7 +28,8 @@ export const linksRoutes: FastifyPluginAsync<{
   db: pg.Pool;
   redis?: Redis;
   clicks?: ClickCounter;
-}> = async (app, { config, db, redis, clicks }) => {
+  metrics?: Metrics;
+}> = async (app, { config, db, redis, clicks, metrics }) => {
   const shortBase = config.baseUrl.replace(/\/+$/, '');
   const shortUrl = (code: string) => `${shortBase}/${code}`;
 
@@ -124,12 +126,15 @@ export const linksRoutes: FastifyPluginAsync<{
         cached = await getCachedLink(redis, code);
       }
       if (cached.kind === 'negative') {
+        metrics?.cacheResult('negative');
         return fail(reply, 404, 'not_found', 'Link not found');
       }
       if (cached.kind === 'hit') {
+        metrics?.cacheResult('hit');
         url = cached.url;
         expiresAt = cached.expiresAt;
       } else {
+        metrics?.cacheResult('miss');
         let link: Link | null = null;
         if (valid) {
           link = await findLinkByCode(db, code);

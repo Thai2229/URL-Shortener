@@ -1,18 +1,47 @@
+import { randomUUID } from 'node:crypto';
+import type { Writable } from 'node:stream';
 import Fastify, { type FastifyReply } from 'fastify';
 import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import type { ClickCounter } from './clicks.js';
 import type { Config } from './config.js';
+import type { Metrics } from './metrics.js';
 import { registerRateLimit } from './ratelimit.js';
 import { healthRoutes } from './routes/health.js';
 import { linksRoutes } from './routes/links.js';
+import { metricsRoutes } from './routes/metrics.js';
 
 export function buildApp(
   config: Config,
-  deps: { db: pg.Pool; redis?: Redis; clicks?: ClickCounter },
+  deps: {
+    db: pg.Pool;
+    redis?: Redis;
+    clicks?: ClickCounter;
+    metrics?: Metrics;
+    logStream?: Writable;
+  },
 ) {
+  const { metrics } = deps;
+  const redact = ['req.headers.authorization', 'req.headers.cookie'];
+  let logger: boolean | object = false;
+  if (deps.logStream) {
+    logger = { level: 'info', stream: deps.logStream, redact };
+  } else if (process.env.NODE_ENV !== 'test') {
+    logger = { level: config.logLevel, redact };
+  }
   const app = Fastify({
-    logger: process.env.NODE_ENV !== 'test' && { level: config.logLevel },
+    logger,
+    requestIdHeader: false,
+    genReqId: (req) => {
+      const incoming = req.headers['x-request-id'];
+      if (
+        typeof incoming === 'string' &&
+        /^[A-Za-z0-9._-]{1,64}$/.test(incoming)
+      ) {
+        return incoming;
+      }
+      return randomUUID();
+    },
     // Fastify accepts a hop count at runtime; its types omit the number form.
     trustProxy: config.trustProxy as boolean,
   });
@@ -22,8 +51,32 @@ export function buildApp(
     reply
       .code(404)
       .send({ error: { code: 'not_found', message: 'Not found' } });
+  // Route pattern for metric labels; never the raw URL (bounded cardinality).
+  const routeLabel = (request: {
+    is404: boolean;
+    routeOptions: { url?: string };
+  }) => {
+    if (request.is404) {
+      return 'unmatched';
+    }
+    return request.routeOptions.url ?? 'unmatched';
+  };
+  app.addHook('onRequest', async (request, reply) => {
+    reply.header('x-request-id', request.id);
+  });
+  if (metrics) {
+    app.addHook('onResponse', async (request, reply) => {
+      metrics.observeRequest(
+        request.method,
+        routeLabel(request),
+        reply.statusCode,
+        reply.elapsedTime / 1000,
+      );
+    });
+  }
   app.setErrorHandler((err: { statusCode?: number }, request, reply) => {
     if (err.statusCode === 429) {
+      metrics?.rateLimited(routeLabel(request));
       return reply.code(429).send({
         error: { code: 'rate_limited', message: 'Too many requests' },
       });
@@ -61,6 +114,10 @@ export function buildApp(
     db: deps.db,
     redis: deps.redis,
     clicks: deps.clicks,
+    metrics,
   });
+  if (config.metricsEnabled && metrics) {
+    app.register(metricsRoutes, { metrics, token: config.metricsToken });
+  }
   return app;
 }

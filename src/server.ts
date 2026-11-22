@@ -3,6 +3,7 @@ import { buildApp } from './app.js';
 import { createClickCounter } from './clicks.js';
 import { loadConfig } from './config.js';
 import { createPool } from './db/pool.js';
+import { createMetrics } from './metrics.js';
 import { createRedis } from './redis.js';
 
 const config = loadConfig();
@@ -14,11 +15,12 @@ let redis: Redis | undefined;
 if (config.redisUrl) {
   redis = createRedis(config.redisUrl);
 }
-const clicks = createClickCounter({ redis, db });
+const metrics = createMetrics({ db, redis });
+const clicks = createClickCounter({ redis, db, metrics });
 if (redis && config.clickFlushIntervalSeconds > 0) {
   clicks.start(config.clickFlushIntervalSeconds * 1000);
 }
-const app = buildApp(config, { db, redis, clicks });
+const app = buildApp(config, { db, redis, clicks, metrics });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.once(signal, () => {

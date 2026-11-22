@@ -4,6 +4,7 @@ import type { Redis } from 'ioredis';
 import type pg from 'pg';
 import { isReady } from './cache.js';
 import { addClicks } from './db/links.js';
+import type { Metrics } from './metrics.js';
 
 const debug = debuglog('clicks');
 
@@ -22,11 +23,13 @@ export function createClickCounter({
   db,
   prefix = 'clicks',
   lockSeconds = 30,
+  metrics,
 }: {
   redis: Redis | undefined;
   db: pg.Pool;
   prefix?: string;
   lockSeconds?: number;
+  metrics?: Metrics;
 }): ClickCounter {
   const processing = `${prefix}:processing`;
   const lock = `${prefix}:lock`;
@@ -39,12 +42,13 @@ export function createClickCounter({
     }
     try {
       await redis.hincrby(prefix, code, 1);
+      metrics?.clickRecorded();
     } catch (err) {
       debug('record %s failed: %O', code, err);
     }
   }
 
-  async function flush() {
+  async function flushOnce(state: { error: boolean }) {
     if (!isReady(redis)) {
       return null;
     }
@@ -95,6 +99,7 @@ export function createClickCounter({
       return total;
     } catch (err) {
       debug('flush failed: %O', err);
+      state.error = true;
       return null;
     } finally {
       try {
@@ -103,6 +108,21 @@ export function createClickCounter({
         debug('unlock failed: %O', err);
       }
     }
+  }
+
+  async function flush() {
+    const started = performance.now();
+    const state = { error: false };
+    const result = await flushOnce(state);
+    let outcome: 'ok' | 'skipped' | 'error' = 'skipped';
+    if (result) {
+      outcome = 'ok';
+    }
+    if (state.error) {
+      outcome = 'error';
+    }
+    metrics?.clickFlush(outcome, (performance.now() - started) / 1000);
+    return result;
   }
 
   function start(intervalMs: number) {

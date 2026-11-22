@@ -19,6 +19,8 @@ describe('loadConfig', () => {
       },
       trustProxy: false,
       clickFlushIntervalSeconds: 5,
+      metricsEnabled: true,
+      metricsToken: undefined,
     });
   });
 
@@ -148,5 +150,57 @@ describe('loadConfig', () => {
         );
       },
     );
+  });
+
+  describe('metrics', () => {
+    it.each(['false', 'False', '0', 'off', 'OFF', 'no', ' false '])(
+      'disables with METRICS_ENABLED=%j',
+      (v) => {
+        expect(loadConfig({ METRICS_ENABLED: v }).metricsEnabled).toBe(false);
+      },
+    );
+
+    it.each(['true', 'True', '1', 'on', 'yes', ' true ', ''])(
+      'enables with METRICS_ENABLED=%j',
+      (v) => {
+        expect(loadConfig({ METRICS_ENABLED: v }).metricsEnabled).toBe(true);
+      },
+    );
+
+    it.each(['maybe', '2', 'disable'])(
+      'throws naming METRICS_ENABLED on %s',
+      (v) => {
+        expect(() => loadConfig({ METRICS_ENABLED: v })).toThrow(
+          /METRICS_ENABLED/,
+        );
+      },
+    );
+
+    it('does not mix up with RATE_LIMIT_ENABLED', () => {
+      const c = loadConfig({ RATE_LIMIT_ENABLED: 'false' });
+      expect(c.metricsEnabled).toBe(true);
+      expect(c.rateLimit.enabled).toBe(false);
+    });
+
+    it('reads METRICS_TOKEN', () => {
+      const token = 'a'.repeat(16);
+      expect(loadConfig({ METRICS_TOKEN: token }).metricsToken).toBe(token);
+      expect(
+        loadConfig({ METRICS_TOKEN: 'long-enough-token-value-123' })
+          .metricsToken,
+      ).toBe('long-enough-token-value-123');
+    });
+
+    it('treats an empty or missing METRICS_TOKEN as undefined', () => {
+      expect(loadConfig({ METRICS_TOKEN: '' }).metricsToken).toBeUndefined();
+      expect(loadConfig({}).metricsToken).toBeUndefined();
+    });
+
+    it('throws naming METRICS_TOKEN when shorter than 16 characters', () => {
+      expect(() => loadConfig({ METRICS_TOKEN: 'a'.repeat(15) })).toThrow(
+        /METRICS_TOKEN/,
+      );
+      expect(() => loadConfig({ METRICS_TOKEN: 'x' })).toThrow(/METRICS_TOKEN/);
+    });
   });
 });

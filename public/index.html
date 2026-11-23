@@ -60,16 +60,6 @@
           reload.
         </p></noscript
       >
-
-      <details>
-        <summary>How it works</summary>
-        <p>
-          Each link gets a random code stored in Postgres, with a Redis cache in
-          front for fast redirects. Creating links is rate limited per IP
-          address. Clicks are counted asynchronously, so counts can lag a little
-          behind.
-        </p>
-      </details>
     </main>
     <script src="/app.js" defer></script>
   </body>

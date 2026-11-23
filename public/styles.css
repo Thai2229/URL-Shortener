@@ -190,23 +190,6 @@ button:disabled {
   color: var(--error);
   font-weight: 600;
 }
-details {
-  margin-top: 2rem;
-  padding-top: 1rem;
-  border-top: 1px solid var(--line);
-  color: var(--muted);
-  font-size: 0.95rem;
-}
-summary {
-  cursor: pointer;
-  color: var(--text);
-  font-weight: 600;
-  width: fit-content;
-}
-details p {
-  margin: 0.75rem 0 0;
-  max-width: 60ch;
-}
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

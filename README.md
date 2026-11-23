@@ -58,7 +58,7 @@ flowchart LR
     pgb --> pg
 ```
 
-A short link redirects like this. A cache hit never touches Postgres; a miss reads one row by its unique code and then fills the cache. Every redirect also adds one to a pending click count in Redis.
+A short link redirects like this. A cache hit never touches Postgres; a miss reads one row by its unique code and then fills the cache. Every GET redirect also adds one to a pending click count in Redis.
 
 ```mermaid
 sequenceDiagram
@@ -91,7 +91,7 @@ flowchart TD
     valid -- no --> e400["400 invalid_url or invalid_expiry"]
     valid -- yes --> code["Generate a random<br/>7-character code"]
     code --> insert["INSERT into PostgreSQL<br/>ON CONFLICT DO NOTHING"]
-    insert -- "code already taken<br/>(retry, up to 5 times)" --> code
+    insert -- "code already taken<br/>(up to 5 attempts in total)" --> code
     insert -- inserted --> cache["Write the link to the Redis cache"]
     cache --> ok["201 with the short URL"]
 ```
@@ -100,7 +100,7 @@ Clicks collect in Redis and a flusher moves them to Postgres in batches, which k
 
 ```mermaid
 flowchart LR
-    redirect["Each 302 redirect"] -->|"add 1"| hash[("Redis hash<br/>pending clicks per code")]
+    redirect["Each GET redirect"] -->|"add 1"| hash[("Redis hash<br/>pending clicks per code")]
     hash -->|"every few seconds, or after a<br/>redirect on Vercel"| flusher["Flusher<br/>holds a Redis lock"]
     flusher -->|"one batched UPDATE"| pg[("PostgreSQL<br/>links.click_count")]
 ```

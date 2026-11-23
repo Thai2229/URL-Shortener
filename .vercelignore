@@ -1,0 +1,6 @@
+loadtest
+docs
+test
+deploy
+*.md
+!README.md

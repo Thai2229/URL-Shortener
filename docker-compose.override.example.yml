@@ -1,0 +1,10 @@
+# Dev access from the host. Copy to docker-compose.override.yml (Compose loads that name
+# automatically; it is gitignored) only on a machine you trust: it publishes Postgres and Redis
+# on loopback. Needed for npm test / npm run dev from the host.
+services:
+  postgres:
+    ports:
+      - '127.0.0.1:5432:5432'
+  redis:
+    ports:
+      - '127.0.0.1:6379:6379'

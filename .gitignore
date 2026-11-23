@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+coverage
+dump.rdb
+loadtest/codes.json
+loadtest/results/
+docker-compose.override.yml

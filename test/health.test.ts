@@ -1,0 +1,15 @@
+import { afterAll, describe, expect, it } from 'vitest';
+import { buildApp } from '../src/app.js';
+import { testConfig } from './helpers/config.js';
+import { usePool } from './helpers/db.js';
+
+describe('GET /healthz', () => {
+  const app = buildApp(testConfig({}), { db: usePool() });
+  afterAll(() => app.close());
+
+  it('returns ok', async () => {
+    const res = await app.inject({ method: 'GET', url: '/healthz' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ status: 'ok' });
+  });
+});
